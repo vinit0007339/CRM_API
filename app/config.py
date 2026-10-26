@@ -307,7 +307,14 @@ def _load(path: str) -> Settings:
                                or get("MAIN", "aws_access_key", None))
     settings.aws_secret_key = (get("AWS", "secret_key", None)
                                or get("MAIN", "aws_secret_key", None))
-    settings.s3_bucket = get("AWS", "s3_bucket", None) or get("S3", "bucket", None)
+    # ⚠️ `[MAIN] s3_bucket` IS IN THE FALLBACK CHAIN BECAUSE THAT IS WHERE THE
+    # PLATFORM KEEPS IT. The credentials and region above already fall back to
+    # `[MAIN]`; the bucket did not, so pasting the platform's `[MAIN]` block
+    # into this file gave you keys and a region and NO bucket — and a missing
+    # bucket means `s3_available()` is False, which silently routes every
+    # attachment to local disk instead of erroring.
+    settings.s3_bucket = (get("AWS", "s3_bucket", None) or get("S3", "bucket", None)
+                          or get("MAIN", "s3_bucket", None))
     settings.s3_region = (get("AWS", "region", None) or get("S3", "region", None)
                           or get("MAIN", "aws_region", None))
     # ⚠️ THE DEFAULT PATH IS THE MONOLITH'S OWN LAYOUT:

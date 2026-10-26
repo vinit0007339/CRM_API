@@ -51,12 +51,32 @@ if __name__ == "__main__":
     print(f"CRM service → http://{'localhost' if not bind_all else host}:{port}"
           f"/docs    (health: /health, readiness: /health/ready)\n")
 
+    # ⚠️ THE RELOADER IS OFF OUTSIDE `dev`, AND THAT IS WHY PM2 CAN RUN THIS
+    # FILE. `ecosystem.config.js` invokes exactly this command on the droplet,
+    # mirroring the platform's own PM2 entry — and the platform's runs its
+    # dev entry point with `reload=True` in production, which costs a watcher
+    # process polling the tree for changes that never come.
+    #
+    # Keyed on `[CRM] environment`, so one command is correct in both places:
+    # `dev` locally gets the reloader, `stage`/`production` do not. Override
+    # either way with CRM_DEV_RELOAD=1 / =0.
+    env_reload = os.environ.get("CRM_DEV_RELOAD", "").strip().lower()
+    if env_reload in ("1", "true", "yes", "on"):
+        reload = True
+    elif env_reload in ("0", "false", "no", "off"):
+        reload = False
+    else:
+        reload = str(getattr(settings, "environment", "dev")).lower() == "dev"
+
+    print(f"    reload: {'on' if reload else 'off'} "
+          f"(environment={getattr(settings, 'environment', '?')})\n")
+
     uvicorn.run(
         "app.main:app",
         host=host,
         port=port,
+        reload=reload,
         # Only `app/` — the default watches the whole tree, so `logs/`,
         # `data/crm_files/` and `config/` churn would all trigger restarts.
-        reload=True,
-        reload_dirs=["app"],
+        reload_dirs=["app"] if reload else None,
     )

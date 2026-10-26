@@ -1,30 +1,45 @@
-// PM2, mirroring the monolith's ecosystem.config.js so the droplet's deploy
-// story does not change: `pm2 startOrRestart ecosystem.config.js`.
+// PM2, mirroring emailMarketingAPI/ecosystem.config.js so the droplet's deploy
+// story is one story: `pm2 startOrRestart ecosystem.config.js`.
 //
-// A SECOND PROCESS BESIDE THE MONOLITH, not a replacement for it. During the
-// Phase 5 dual-run both serve the CRM and nginx still points at the monolith;
-// Phase 6 is one nginx rule and a reload, and the rollback is the same reload
-// backwards.
+// A SECOND PROCESS BESIDE THE PLATFORM, not a replacement for it. nginx routes
+// /api/v1/crm/ here; everything else still goes to the platform.
+//
+// ⚠️ CHECK `cwd` BEFORE THE FIRST DEPLOY. It is a sibling of the platform,
+// whose own PM2 file says /var/cylonmarketing-test/emailMarketingAPI — but
+// CRM_API has never been deployed, so this path is inferred, not observed. Get
+// it wrong and PM2 starts in a directory that does not exist and restart-loops
+// with "no such file or directory", which reads like a broken build rather
+// than a wrong path. An earlier version of this file guessed
+// /var/emailMarketingAPI-stage/ and was wrong.
 module.exports = {
   apps: [
     {
-      name: "crm-service-stage",
-      // ⚠️ `cwd` AND `PYTHONPATH` BELOW ARE PATHS ON THE DROPLET, and they
-      // were renamed with this repo (crm-service-api → CRM_API). The
-      // directory on the server has to be renamed to match, or PM2 starts in
-      // a path that does not exist and the app restart-loops with
-      // "no such file or directory" — which looks like a broken build.
-      // If you are not renaming it on the server, change these two back.
+      name: "crmApi-stage",
       script: "bash",
-      args: "-c 'poetry run uvicorn app.main:app --host 127.0.0.1 --port 8100'",
-      cwd: "/var/emailMarketingAPI-stage/CRM_API",
+      // Same entry point as the platform: `dev_api.py` reads the port from
+      // [CRM] port, prints the URL, and binds 127.0.0.1.
+      //
+      // ⚠️ IT ALSO TURNS THE RELOADER OFF HERE, because CRM_ENV below is not
+      // "dev". The platform's PM2 entry runs its dev_api.py with reload=True
+      // in production, which leaves a watcher process polling the tree for
+      // changes that never arrive; this service keys the reloader on the
+      // environment so one command is right in both places.
+      args: "-c 'poetry run python dev_api.py'",
+      cwd: "/var/cylonmarketing-test/CRM_API",
       interpreter: "none",
       autorestart: true,
-      // Liveness is /health, which touches nothing. If this ever watches
-      // /health/ready instead, a Mongo blip becomes a restart loop — see the
-      // note above the two endpoints in app/main.py.
+      // ⚠️ NO `instances` / `exec_mode`, SO THIS IS ONE PROCESS — and that is
+      // load-bearing, not a default left alone. [CRM] task_reminders may be
+      // true in exactly one process: two schedulers both poll every minute,
+      // and the only thing between that and a customer getting two reminder
+      // emails is the conditional update on reminder.sent_at. If you ever add
+      // `instances: 2`, move the scheduler out of the web process first.
       env: {
-        PYTHONPATH: "/var/emailMarketingAPI-stage/CRM_API",
+        PYTHONPATH: "/var/cylonmarketing-test/CRM_API",
+        // Drives [CRM] environment: no reloader, and /health reports it.
+        // Production needs its own app entry with CRM_ENV: "production" and
+        // its own cwd — this file describes stage only, same as the
+        // platform's.
         CRM_ENV: "stage",
       },
     },
