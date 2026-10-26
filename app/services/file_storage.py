@@ -26,14 +26,23 @@ from __future__ import annotations
 import os
 from typing import Optional, Tuple
 
-from app.config import logger as _logger
+from app.config import logger as _logger, settings as _conf
 # Long enough to click and download, short enough that a leaked URL in a
 # browser history or a chat paste is not a lasting exposure.
 SIGNED_URL_TTL_SECONDS = 300
 
 
 def _settings():
-    return getattr(core_app, "settings", None)
+    """This service's settings.
+
+    ⚠️ THIS READ `core_app.settings` AND `core_app` DOES NOT EXIST HERE. The
+    extraction replaced the monolith's `core_app` with `app/config.py`, on the
+    grounds that all 85 references to it were `core_app.logger` — this file was
+    the exception nobody counted, and it uses `.settings`. The result was a
+    `NameError` on the FIRST file upload and on every CSV export, from a
+    module that imports cleanly and passes a contract check.
+    """
+    return _conf
 
 
 def s3_available() -> bool:
@@ -51,13 +60,17 @@ def _client():
         "s3",
         aws_access_key_id=s.aws_access_key,
         aws_secret_access_key=s.aws_secret_key,
-        region_name=getattr(s, "aws_region", None) or None,
+        region_name=getattr(s, "s3_region", None) or None,
     )
 
 
 def _local_path(key: str) -> str:
     s = _settings()
-    base = (getattr(s, "uploads_dir", None) or os.path.join(os.getcwd(), "uploads"))
+    # `local_file_dir` here, not the monolith's `uploads_dir`: this service
+    # keeps CRM attachments in their own tree (`data/crm_files`) so a dev box
+    # without AWS keys never mixes them with the platform's public assets.
+    base = (getattr(s, "local_file_dir", None)
+            or os.path.join(os.getcwd(), "data", "crm_files"))
     return os.path.join(base, "crm-private", key.replace("/", os.sep))
 
 

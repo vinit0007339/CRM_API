@@ -142,6 +142,13 @@ class Settings:
     host_claims_map: Dict[str, str] = field(default_factory=dict)
 
     # ── file storage (Phase 2) ──────────────────────────────────────────────
+    #: ⚠️ THESE TWO WERE MISSED IN THE EXTRACTION, and `file_storage.py` has
+    #: been reading them off a `core_app` that does not exist in this service
+    #: — a NameError on the first file upload or CSV export. They are the
+    #: platform's own names because the droplet's app.conf is the file this
+    #: service is pointed at.
+    aws_access_key: Optional[str] = None
+    aws_secret_key: Optional[str] = None
     s3_bucket: Optional[str] = None
     s3_region: Optional[str] = None
     #: Where `crm_files` are written when S3 is not configured. The dev
@@ -294,8 +301,15 @@ def _load(path: str) -> Settings:
     settings.cors_origin_regex = (get("CRM", "cors_origin_regex", None)
                                   or settings.cors_origin_regex)
 
+    # Credentials from [AWS] if present, else the platform's [MAIN] spelling —
+    # the droplet points this service at the platform's own app.conf.
+    settings.aws_access_key = (get("AWS", "access_key", None)
+                               or get("MAIN", "aws_access_key", None))
+    settings.aws_secret_key = (get("AWS", "secret_key", None)
+                               or get("MAIN", "aws_secret_key", None))
     settings.s3_bucket = get("AWS", "s3_bucket", None) or get("S3", "bucket", None)
-    settings.s3_region = get("AWS", "region", None) or get("S3", "region", None)
+    settings.s3_region = (get("AWS", "region", None) or get("S3", "region", None)
+                          or get("MAIN", "aws_region", None))
     # ⚠️ THE DEFAULT PATH IS THE MONOLITH'S OWN LAYOUT:
     # `<config_dir>/jwt/jwt_rs256.key.pub`, which is where
     # `RsJwtCreator.get_public_key` reads it from. A deploy that drops this
