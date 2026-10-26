@@ -8,3 +8,5 @@ logs/
 data/
 .DS_Store
 .pytest_cache/
+config/*.bak*
+logs/

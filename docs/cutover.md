@@ -176,12 +176,21 @@ Three steps, and **the order is the whole safety story**. Two of them are
 additive and can go out today; the third cannot go out until the nginx rule
 above is live and watched.
 
-The files are in this repo, under `platform-phase7/`:
-
-| file | what it is |
-|---|---|
-| `step-c-code.patch` | the five code changes, as a `git apply` patch |
-| `step-c-remove-crm.sh` | the deletions and the one move, as `git rm`/`git mv` |
+> ✅ **ALL THREE ARE APPLIED AND COMMITTED** in `emailMarketingAPI` (commits
+> `a5b9826` … `7759c17`). This section is kept as the record of what was done
+> and in what order — not as work still to do.
+>
+> A `platform-phase7/` directory used to sit in this repo holding
+> `step-c-code.patch` and `step-c-remove-crm.sh`. Both were one-shot tools,
+> both have been run, and it was deleted once the platform's own commits made
+> them redundant. ⚠️ **TO UNDO ANY OF THIS, REVERT THOSE COMMITS** — do not go
+> looking for the patch. It was generated against a baseline that has since
+> moved (the `contacts.py` decorator fix landed after it), so re-applying it
+> would not be clean.
+>
+> ⚠️ **AND REVERTING THE CODE IS NOT ENOUGH ON ITS OWN.** The nginx rule in §2
+> above has to go back at the same time, or the platform serves CRM routes
+> that nginx is still sending to this service.
 
 ## Step A — the platform answers "who is this caller?"  ✅ safe to deploy now
 

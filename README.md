@@ -20,8 +20,13 @@ boundary's two failure classes, where confusing them creates duplicate
 contacts during an import; and that `[CRM] profile` still defaults to `full`,
 which is the only thing standing between a config edit and most of Engage's
 CRM screens going 404. `scripts/crm_tests.py` holds the expected counts and
-says what is missing if you run it; `.github/workflows/tests.yml` is trimmed
-to the contract check, with the suite steps commented out ready to restore.
+says what is missing if you run it.
+
+⚠️ **AND THERE IS NO CI.** `.github/workflows/` was removed too. Nothing runs
+`scripts/check_crm_contract.py` on a push any more, so contract drift — a
+router mounted at the wrong prefix, which is a silent 404 on one screen rather
+than a crash — is now caught only when somebody runs it by hand. Worth
+remembering before the next endpoint is added.
 
 ## Using this CRM from another project
 
