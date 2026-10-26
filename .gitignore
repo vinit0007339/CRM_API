@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+poetry.lock
+config/app.conf
+logs/
+data/
+.DS_Store
+.pytest_cache/

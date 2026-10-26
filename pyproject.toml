@@ -1,0 +1,47 @@
+[tool.poetry]
+name = "crm-api"
+version = "0.1.0"
+description = "The Engage CRM, as a service of its own."
+authors = ["cylontechnology"]
+package-mode = false
+packages = [{ include = "app" }]
+
+# ⚠️ NINE DEPENDENCIES, AND THE SHORTNESS OF THIS LIST IS THE POINT.
+#
+# The monolith needs ~35 packages, and the CRM used none of most of them:
+# stripe, razorpay, openai, pymupdf, reportlab, pyhanko, pillow, jinja2,
+# google-auth, passlib, bcrypt, dnspython and aiohttp are all absent here on
+# purpose. A CRM deploy no longer reinstalls, revalidates or carries the CVE
+# surface of the billing, email-rendering and PDF stacks.
+#
+# Before adding anything to this list, check whether the need is really a
+# SERVICE-TO-SERVICE CALL. "The CRM must send an email" is not a reason to add
+# an SMTP library; it is a reason to ask the platform to send one.
+[tool.poetry.dependencies]
+python = "^3.10"                                   # same floor as the monolith
+fastapi = "^0.128.0"                               # pinned WITH the monolith
+pydantic = "^2.7.1"                                #   — see the note below
+uvicorn = "^0.40.0"
+motor = "^3.0.0"
+beanie = ">=1.26.0,<2.0.0"
+PyJWT = { extras = ["crypto"], version = "^2.4.0" }   # RS256 verification
+boto3 = "^1.34.0"                                  # crm_files storage
+python-multipart = ">=0.0.9,<1.0.0"                # file upload
+httpx = "^0.28.1"                                  # calling the platform
+
+# ⚠️ fastapi, pydantic, motor and beanie are pinned to the SAME ranges as the
+# monolith's pyproject.toml, deliberately. Two services sharing one database
+# must agree about how a document serialises: a different pydantic minor
+# changes how an untyped `data` field is encoded, and a different beanie
+# changes what `init_beanie` does to indexes. During the dual-run of Phase 5
+# the two services are diffed against each other, and a library drift would
+# show up as a behaviour difference nobody could explain.
+#
+# Let them drift only AFTER the cutover, one at a time, with the suite green.
+
+[tool.poetry.group.dev.dependencies]
+pylint = "^3.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

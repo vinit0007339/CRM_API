@@ -1,0 +1,153 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# FOR THE **PLATFORM** REPO, not this one.
+#
+#   save as:  emailMarketingAPI/api/routes/internal_auth.py
+#   register: one include_router call in api/routes_handler.py (bottom of file)
+#   nginx:    one deny rule (bottom of file)
+#
+# This is the other half of the CRM service's authentication. It answers one
+# question — "who is this caller and what may they do?" — and it answers it by
+# declaring the EXISTING `get_request_context` dependency and serialising the
+# result.
+#
+# ⚠️ THERE IS NO NEW IDENTITY LOGIC HERE, AND THAT IS THE ENTIRE POINT. The CRM
+# service could have copied `context.py`, `account_context.py`, `team_users.py`,
+# the API-key narrowing and the admin role overrides — roughly 800 lines of the
+# platform's account, team, invite and key rules. Two copies of a tenancy
+# decision is the most expensive duplication this project has available: the
+# copies drift, and the direction they drift is one tenant seeing another's
+# records. So the platform keeps answering, and every future change to roles,
+# teams, invites or keys reaches the CRM for free.
+#
+# API keys work from day one for the same reason: `get_request_context` already
+# narrows a key to its scopes, and this endpoint reports the result.
+# ─────────────────────────────────────────────────────────────────────────────
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Header, status
+
+from app import core_app
+from api.dependencies.context import RequestContext, get_request_context
+from api.utils.custom_error import ApiError
+from api.schemas.main.crm.common import ResponseSchema
+
+router = APIRouter()
+
+
+def _require_internal_key(x_internal_key: Optional[str] = Header(None)) -> None:
+    """Second lock. The first is the nginx rule at the bottom of this file.
+
+    ⚠️ BOTH, NOT EITHER. A header can leak into an access log or a bug report;
+    an nginx config can be edited by someone who does not know why a rule is
+    there. Neither is load-bearing alone.
+
+    Configured as `[MAIN] internal_api_key` (or `INTERNAL_API_KEY` in the
+    environment). If it is UNSET the endpoint refuses outright rather than
+    running open — an internal endpoint that is accidentally public is worse
+    than one that is accidentally broken, because nothing tells you.
+    """
+    expected = (
+        getattr(core_app.settings, "internal_api_key", None)
+        or __import__("os").environ.get("INTERNAL_API_KEY", "").strip()
+    )
+    if not expected:
+        raise ApiError(
+            "Internal API is not configured.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    # `compare_digest`, not `==`: a plain comparison returns as soon as two
+    # bytes differ, and the time it takes leaks the prefix one byte at a time.
+    import hmac
+
+    if not x_internal_key or not hmac.compare_digest(str(x_internal_key), str(expected)):
+        raise ApiError("Not found.", status_code=status.HTTP_404_NOT_FOUND)
+
+
+@router.get("/auth/context", response_model=ResponseSchema,
+            dependencies=[Depends(_require_internal_key)])
+async def auth_context(ctx: RequestContext = Depends(get_request_context)):
+    """The caller's resolved context, for a sibling service.
+
+    The caller presents the END USER's `Authorization` header (and their
+    `X-Account-Id` if they sent one); `get_request_context` resolves it exactly
+    as it would for a browser request, including the API-key narrowing. A
+    rejection propagates as the platform's own 401/403, which the CRM passes
+    through unchanged so the two services answer identically.
+
+    ⚠️ WHAT IS DELIBERATELY NOT IN THE RESPONSE: anything the CRM does not
+    use. No token, no key document, no email-balance or subscription state, no
+    team-member row. An internal endpoint that returns "the user" grows into a
+    second user API, and then into a reason not to change the first one.
+    """
+    user = ctx.user
+    return ResponseSchema(
+        status="success",
+        message="",
+        data={
+            "account_id": ctx.account_id,
+            "role": ctx.role,
+            "is_owner": ctx.is_owner,
+            "extra_grants": list(ctx.extra_grants or []),
+            "denials": list(ctx.denials or []),
+            "custom_roles": dict(ctx.custom_roles or {}),
+            "builtin_overrides": dict(ctx.builtin_overrides or {}),
+            "is_api_key": ctx.is_api_key,
+            "user": {
+                # `str(...)` on the id: it is an ObjectId, `data` is untyped on
+                # a bare ResponseSchema, and pydantic has no serializer for
+                # one — the same trap that 500ed GET /crm/deals/{id}/companies.
+                "id": str(getattr(user, "id", "") or "") or None,
+                "email": getattr(user, "email", None),
+                "first_name": getattr(user, "first_name", None),
+                "last_name": getattr(user, "last_name", None),
+                "username": getattr(user, "username", None),
+                "picture_url": getattr(user, "picture_url", None),
+            },
+        },
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REGISTER IT — in api/routes_handler.py, beside the other include_router calls
+# ─────────────────────────────────────────────────────────────────────────────
+#
+#     from api.routes import internal_auth
+#
+#     api_app.include_router(
+#         internal_auth.router,
+#         tags=["Internal"],
+#         prefix=f"{API_ROOT_PATH}/internal",
+#         responses={**error_responses},
+#     )
+#
+# ⚠️ IT IS NOT A CRM ENDPOINT, so it must NOT go under /crm/ — the cutover
+# routes /api/v1/crm/ to the CRM service, and an auth endpoint living there
+# would be routed to the service that is trying to call it. Circular, and only
+# at the moment of cutover.
+#
+# `scripts/check_crm_contract.py` counts endpoints under /crm only, so the
+# documented 83 is unaffected.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# AND DENY IT FROM OUTSIDE — in the droplet's nginx config
+# ─────────────────────────────────────────────────────────────────────────────
+#
+#     location /api/v1/internal/ {
+#         allow 127.0.0.1;
+#         allow ::1;
+#         deny all;
+#         proxy_pass http://127.0.0.1:8000;   # the platform's port
+#     }
+#
+# Place it ABOVE the general `location /api/` block: nginx picks the longest
+# matching prefix, so this wins for /api/v1/internal/ and nothing else changes.
+#
+# Verify after reloading, from your laptop and then on the box:
+#
+#     curl -i https://<host>/api/v1/internal/auth/context       # expect 403
+#     curl -i -H "X-Internal-Key: $KEY" \
+#          -H "Authorization: Bearer $TOKEN" \
+#          http://127.0.0.1:8000/api/v1/internal/auth/context   # expect 200
+#
+# A 404 with the key present means the key does not match. That is deliberate:
+# the endpoint does not confirm its own existence to a caller without it.
