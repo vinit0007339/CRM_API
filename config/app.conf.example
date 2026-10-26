@@ -25,17 +25,7 @@ log_dir = logs
 ;
 ; On the droplet this is the platform's own file, so point at it rather than
 ; copying: `RsJwtCreator.get_public_key` reads <config_dir>/jwt/jwt_rs256.key.pub.
-;
-; ⚠️ A RELATIVE VALUE RESOLVES AGAINST THE REPO ROOT, not the working
-; directory — so ONE value works on a laptop and in a container:
-;
-;     jwt_public_key_path = config/jwt/jwt_rs256.key.pub
-;
-; is <repo>/config/jwt/... on a Mac and /app/config/jwt/... in an image whose
-; WORKDIR is /app. Place the key there per environment; `config/jwt/` is
-; gitignored, because stage and prod may not share a keypair and a committed
-; key is one that cannot differ. An absolute value is used untouched.
-jwt_public_key_path = config/jwt/jwt_rs256.key.pub
+jwt_public_key_path = /var/emailMarketingAPI-stage/emailMarketingAPI/config/jwt/jwt_rs256.key.pub
 
 ; Where the platform API lives. The CRM verifies the token itself but asks the
 ; platform WHO the caller is (`GET /api/v1/internal/auth/context`), so that

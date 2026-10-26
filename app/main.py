@@ -269,85 +269,6 @@ async def health():
     }
 
 
-#: Candidate hosts for the platform, tried by `/health/ready` when
-#: `CRM_DIAGNOSE_PLATFORM` is set. A FIXED list — nothing here comes from a
-#: request, so this is a self-check and not an open redirect or an SSRF.
-#:
-#: ⚠️ WHY THIS EXISTS AT ALL. `platform_base_url` has to name a host that is
-#: reachable from INSIDE this process, and when the CRM runs in a container
-#: while the platform runs under PM2 on the host, that is neither `127.0.0.1`
-#: (which is the container) nor the public hostname (which goes out and back
-#: through nginx). Working it out normally means a shell on the box — and on a
-#: managed deploy there may not be one. An env var is a lever you always have,
-#: so the service can answer the question about itself.
-_PLATFORM_CANDIDATES = (
-    # Docker's bridge gateway: the host, as seen from a default-network
-    # container on Linux. The usual answer for PM2-on-host + CRM-in-container.
-    "172.17.0.1",
-    # Docker Desktop, and Linux when run with --add-host=host-gateway.
-    "host.docker.internal",
-    # Same host/namespace — right if both end up in one place after all.
-    "127.0.0.1",
-    # Compose/k8s service names, in the order they are usually spelled.
-    "emailmarketingapi", "emailmarketing-api", "emailmarketingapi-stage",
-    "platform", "api", "backend",
-)
-
-
-async def _probe_platform() -> dict:
-    """Which candidate hosts answer, so `platform_base_url` can be set once.
-
-    Concurrent, with a short per-probe timeout: this runs inside a readiness
-    check that nginx polls, so it must not become the slowest thing in the
-    response. Off unless CRM_DIAGNOSE_PLATFORM is truthy.
-    """
-    import asyncio                              # pylint: disable=import-outside-toplevel
-    import os                                   # pylint: disable=import-outside-toplevel
-    from urllib.parse import urlparse           # pylint: disable=import-outside-toplevel
-
-    flag = os.environ.get("CRM_DIAGNOSE_PLATFORM", "").strip().lower()
-    if flag not in ("1", "true", "yes", "on"):
-        return {"enabled": False,
-                "hint": "set CRM_DIAGNOSE_PLATFORM=1 to probe candidate hosts"}
-
-    configured = settings.platform_base_url or ""
-    port = 8197
-    if configured:
-        parsed = urlparse(configured)
-        port = parsed.port or port
-
-    async def one(url: str) -> tuple:
-        try:
-            import httpx                         # pylint: disable=import-outside-toplevel
-
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                # `/docs` needs no auth and no body — it only has to prove the
-                # TCP path and that something FastAPI-shaped is listening.
-                response = await client.get(f"{url}/docs")
-            return url, f"HTTP {response.status_code}"
-        except Exception as ex:                  # pylint: disable=broad-except
-            return url, f"{type(ex).__name__}"
-
-    urls = []
-    if configured:
-        urls.append(configured.rstrip("/"))
-    urls += [f"http://{host}:{port}" for host in _PLATFORM_CANDIDATES
-             if f"http://{host}:{port}" != configured.rstrip("/")]
-
-    results = await asyncio.gather(*(one(u) for u in urls))
-    reachable = [u for u, r in results if r.startswith("HTTP")]
-    return {
-        "enabled": True,
-        "port_tried": port,
-        "configured": configured or None,
-        "results": dict(results),
-        "reachable": reachable,
-        "set_this": (f"CRM_PLATFORM_BASE_URL={reachable[0]}" if reachable else
-                     "none answered — check the port, or the platform is not "
-                     "reachable from this container at all"),
-    }
-
-
 @app.get("/health/ready", tags=["health"])
 async def ready():
     """Readiness: can this process serve a request that reads the database?
@@ -378,9 +299,6 @@ async def ready():
         # FAILED against a dead Mongo. Readiness must not flatter itself.
         "models": {"declared": len(db_module.MODELS),
                    "registered": db_module.INIT_ERROR is None},
-        # Opt-in, and off by default: it names internal hosts, which is not
-        # something an unauthenticated endpoint should volunteer.
-        "platform_probe": await _probe_platform(),
     }
     return JSONResponse(status_code=200 if reachable else 503, content=body)
 
