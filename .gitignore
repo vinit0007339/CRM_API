@@ -4,6 +4,12 @@ __pycache__/
 venv/
 poetry.lock
 config/app.conf
+# ⚠️ KEYS ARE PER-ENVIRONMENT, like app.conf above. `jwt_public_key_path` can
+# now be written repo-relative (`config/jwt/jwt_rs256.key.pub`) so ONE config
+# value works on a laptop and in a container — but the file itself must be
+# placed per environment, not committed. Stage and prod may not share a
+# keypair, and a committed key is one that cannot differ.
+config/jwt/
 logs/
 data/
 .DS_Store

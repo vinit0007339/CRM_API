@@ -1,0 +1,142 @@
+; config/app.conf — copy to config/app.conf and fill in.
+;
+; The format, section names and option names are the monolith's, unchanged, so
+; the droplet's existing file works as-is. The service reads ONLY the keys
+; below; everything else in the platform's app.conf is ignored.
+;
+; MAIN_DB_URI and MAIN_DB_NAME in the environment override this file, exactly
+; as they do for the monolith.
+
+[MAIN_DATABASE]
+db_uri = mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority
+db_name = engage_stage
+
+[CRM]
+; The port this service listens on. nginx sends /api/v1/crm/ here.
+port = 8100
+; "dev" | "stage" | "production". "dev" also turns on permissive CORS for
+; localhost:3000, and nothing else.
+environment = stage
+log_dir = logs
+; ── authentication ──────────────────────────────────────────────────────────
+; PEM PUBLIC key for RS256 access-token verification. The PUBLIC half only —
+; never the signing key: this service verifies tokens and must not be able to
+; mint one, so a breach here cannot forge a session.
+;
+; On the droplet this is the platform's own file, so point at it rather than
+; copying: `RsJwtCreator.get_public_key` reads <config_dir>/jwt/jwt_rs256.key.pub.
+;
+; ⚠️ A RELATIVE VALUE RESOLVES AGAINST THE REPO ROOT, not the working
+; directory — so ONE value works on a laptop and in a container:
+;
+;     jwt_public_key_path = config/jwt/jwt_rs256.key.pub
+;
+; is <repo>/config/jwt/... on a Mac and /app/config/jwt/... in an image whose
+; WORKDIR is /app. Place the key there per environment; `config/jwt/` is
+; gitignored, because stage and prod may not share a keypair and a committed
+; key is one that cannot differ. An absolute value is used untouched.
+jwt_public_key_path = config/jwt/jwt_rs256.key.pub
+
+; Where the platform API lives. The CRM verifies the token itself but asks the
+; platform WHO the caller is (`GET /api/v1/internal/auth/context`), so that
+; account, role, grants, denials, custom roles and API-key narrowing stay in
+; the one implementation that owns them. See app/auth/introspect.py for why
+; that is not a copy of the monolith's identity code, and
+; docs/platform-internal-auth.py.txt for the endpoint itself.
+;
+; Loopback, not the public hostname: the call stays on the box, and the nginx
+; rule that denies /api/v1/internal/ from outside cannot get in the way of it.
+platform_base_url = http://127.0.0.1:8000
+
+; Shared secret for that endpoint, sent as X-Internal-Key. Must match the
+; platform's [MAIN] internal_api_key (or its INTERNAL_API_KEY env var). The
+; second of two locks; the first is the nginx deny rule.
+; internal_key = change-me
+
+; Seconds. This call sits in front of every request, so a slow platform must
+; fail fast and visibly rather than holding workers.
+introspect_timeout = 3.0
+
+; Does THIS process run the CRM task-reminder sweep?
+;
+; ⚠️ EXACTLY ONE PROCESS MAY, AND IT IS THE PLATFORM UNTIL PHASE 7. The
+; monolith's api/main.py starts its own copy until that commit deletes it. Two
+; owners is survivable — each reminder is claimed with a conditional update on
+; reminder.sent_at — but that claim is the only thing between "two schedulers"
+; and "two reminder emails to a customer", and it is not a guarantee to lean on
+; by accident.
+;
+; Turn this on in the SAME DEPLOY that removes the scheduler from the
+; platform. GET /health reports `task_reminders.configured` and `.running`, so
+; checking is one curl. Anything but 1/true/yes/on is OFF — a typo must not
+; start a second scheduler.
+; task_reminders = false
+
+; How much of the CRM to serve. See app/profiles.py, including why this is a
+; profile and not a second, smaller repository.
+;
+;   full     83 endpoints, 12 route modules. Engage. ⚠️ THE DEFAULT, and it
+;            must stay the default: Engage's UI calls all 83, and the config
+;            on the droplet predates this option.
+;   core     61 endpoints, 7 modules. Companies, deals, pipelines and the
+;            board, plus notes and tasks. Leaves out saved views, per-user
+;            column layouts, the import wizard, export jobs and files.
+;   minimal  47 endpoints, 5 modules. Records, pipelines, board. No notes or
+;            tasks, for a project with its own activity model.
+;
+; A typo serves `full` rather than a third of the API — serving too much is
+; visible and harmless; serving a third is neither.
+; profile = full
+
+; ─────────────────────────────────────────────────────────────────────────────
+; THE HOST BOUNDARY — everything this service needs from the app around it.
+; Full spec, including the two endpoints a new consumer implements:
+;     docs/host-contract.md
+; ─────────────────────────────────────────────────────────────────────────────
+[HOST]
+
+; Who is this caller, and what may they do?
+;   introspect  ask the host per request (cached 30s). The host implements
+;               GET /api/v1/internal/auth/context. Its answer stays the ONLY
+;               copy of the account, team, invite and key rules.
+;   jwt_claims  read the claims out of the token this service has already
+;               verified. No endpoint for the consumer to implement.
+;               ⚠️ Moves the tenancy decision to whoever mints the token, and
+;               a revoked grant is honoured until the token expires.
+; ⚠️ A TYPO FALLS BACK TO `introspect`, never to `jwt_claims`: falling back
+; the other way would quietly stop asking the host anything — a weakening of
+; authorisation produced by a misspelling.
+identity = introspect
+
+; What is this user / tag / contact called?
+;   shared_db   plain reads of the host's `users`, `tags` and `contacts`.
+;               Requires ONE Mongo shared with the host. The platform's.
+;   http        one endpoint on the host:
+;               POST /api/v1/internal/crm-host/directory
+;   none        no directory. Companies, deals, pipelines, the board, notes,
+;               tasks, files, attributes, saved views, imports and exports all
+;               work; owner names and tag chips degrade to ids or blanks. A
+;               fine way to start a new project.
+directory = shared_db
+
+; Where the host lives, for the http adapters. Defaults to
+; [CRM] platform_base_url, so an existing deployment needs no change here.
+; base_url = http://127.0.0.1:8000
+
+; Shared secret for the host's internal endpoints. Defaults to
+; [CRM] internal_key, for the same reason.
+; internal_key = change-me
+
+; For `identity = jwt_claims` only: rename the claims, because no two auth
+; servers agree on them. One per line; anything not listed uses the default.
+; A SECTION rather than a JSON blob in one option — a mistyped brace would
+; otherwise cost the whole host configuration rather than one claim name.
+; [HOST_CLAIMS]
+; account_id = https://acme.example/claims/org
+; role       = roles
+
+[AWS]
+; crm_files storage (Phase 2). Without these, files fall back to local_file_dir,
+; which is the dev path the file routes already have.
+; s3_bucket = engage-stage
+; region = ap-south-1

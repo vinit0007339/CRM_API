@@ -105,8 +105,24 @@ async def get_request_context(
     guessed account id, because every CRM query is scoped by that value and a
     guess serves one tenant's records to another.
     """
-    if not settings.jwt_public_key or not settings.platform_base_url:
-        raise AuthNotConfiguredError()
+    # ⚠️ NAME WHICH ONE IS MISSING. This used to raise the generic message,
+    # which lists BOTH settings — so a stage box with a good platform_base_url
+    # and an unreadable key file reported "it needs a JWT public key and the
+    # platform's base URL" and the reader had no way to tell which half was
+    # wrong. In a container, where the key is mounted rather than sitting
+    # beside the platform, that is the likely failure and the one the message
+    # was least helpful about.
+    absent = []
+    if not settings.jwt_public_key:
+        absent.append("the JWT public key (jwt_public_key_path points at a "
+                      "file this process cannot read)")
+    if not settings.platform_base_url:
+        absent.append("platform_base_url")
+    if absent:
+        raise AuthNotConfiguredError(
+            "The CRM service is not configured to authenticate requests: "
+            f"missing {' and '.join(absent)}. "
+            "GET /health/ready lists it with the resolved path.")
 
     try:
         token = tokens.bearer(authorization)

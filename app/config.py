@@ -35,6 +35,38 @@ DEFAULT_CONFIG_PATH = os.environ.get(
 )
 
 
+#: The repo root — the directory `config/` and `app/` sit in. Derived from this
+#: file's own location, exactly as DEFAULT_CONFIG_PATH above is.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _rooted(value):
+    """An absolute path from a config value, resolving RELATIVE against the repo.
+
+    ⚠️ RELATIVE USED TO MEAN "RELATIVE TO THE WORKING DIRECTORY", which is not
+    what anybody writing `config/jwt/jwt_rs256.key.pub` in `app.conf` means —
+    and the working directory is set by whoever starts the process (PM2's
+    `cwd`, a Dockerfile's `WORKDIR`, or wherever you happened to be standing).
+    The config file itself is already located this way; paths inside it were
+    not, which made them silently depend on how the service was launched.
+    Resolving against the repo is what makes ONE value work on a laptop and in
+    a container:
+
+        jwt_public_key_path = config/jwt/jwt_rs256.key.pub
+
+    is `/Users/you/Work/Engage/CRM_API/config/...` on a Mac and
+    `/app/config/...` in an image whose WORKDIR is /app — with no env var and
+    no per-environment edit.
+
+    An ABSOLUTE value is returned untouched, so every existing config keeps
+    working unchanged.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return text if os.path.isabs(text) else os.path.join(REPO_ROOT, text)
+
+
 #: The platform's allow-list, verbatim from `api/main.py`. A literal here
 #: rather than an import — there is nothing to import across a repo boundary —
 #: so `tests/test_cors.py` pins it and says where to look when it drifts.
@@ -326,6 +358,7 @@ def _load(path: str) -> Settings:
     key_path = (os.environ.get("CRM_JWT_PUBLIC_KEY_PATH", "").strip()
                 or get("CRM", "jwt_public_key_path", None)
                 or get("MAIN", "jwt_public_key_path", None))
+    key_path = _rooted(key_path)
     if key_path and os.path.exists(key_path):
         with open(key_path, "r", encoding="utf-8") as handle:
             settings.jwt_public_key = handle.read()
