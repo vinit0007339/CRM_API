@@ -36,6 +36,7 @@ from fastapi import APIRouter, Depends, Path, Query
 
 from app.config import logger as _logger
 from app.crud import (
+    CrmContactCrud,
     CompanyCrud, CrmAttributeCrud, DealCrud,
 )
 from app.models.attribute import CrmAttributeModel
@@ -98,7 +99,22 @@ async def _value_count(crud_for, account_id, row: CrmAttributeModel) -> int:
 @router.get("", response_model=ResponseSchema)
 async def list_attributes(
     object_type: Optional[str] = Query(
-        None, pattern="^(deal|company)$",
+        # ⚠️ `contact` BELONGS HERE AND WAS MISSING, AND THE FAILURE WAS NOT A
+        # 404. A pattern mismatch is a FastAPI 422 before the handler runs, so
+        # `GET /crm/attributes?object_type=contact&show_on_form=true` — which
+        # is exactly what `ContactFormDialog` fetches — came back as
+        # "Unprocessable Entity". The dialog then fell through to
+        # `attributeFormHelpers`'s hard-coded set, which its own comment calls
+        # load-bearing, so the form still RENDERED: nine system fields, and no
+        # custom contact attribute ever, with nothing in the UI to say so.
+        #
+        # Kept as a literal pattern rather than derived from `CrmObjectType`
+        # because this is the public contract of a query parameter and the
+        # error message should name the values, but it must be changed with the
+        # enum. `app/schemas/attribute.py` types the WRITE side as
+        # `CrmObjectType`, which is why create/update accepted contact all
+        # along and only this read refused it.
+        None, pattern="^(deal|company|contact)$",
         description="Omit for every object type",
     ),
     show_on_form: Optional[bool] = Query(
@@ -304,6 +320,7 @@ async def delete_attribute(
     crud: CrmAttributeCrud = Depends(get_crud(CrmAttributeCrud)),
     companies: CompanyCrud = Depends(get_crud(CompanyCrud)),
     deals: DealCrud = Depends(get_crud(DealCrud)),
+    contacts: CrmContactCrud = Depends(get_crud(CrmContactCrud)),
 ):
     """Delete a custom attribute, and every value stored under it.
 
@@ -326,7 +343,13 @@ async def delete_attribute(
     # collection — so the delete confirmation reported 0 records holding a
     # value, and the guard that exists to prevent silent data loss waved it
     # through.
+    # ⚠️ AND `contact` WAS MISSING FROM IT, while the comment directly above
+    # described the contact case as the reason the lookup exists. With no arm
+    # for it, every contact attribute hit the refusal below — so a contact
+    # attribute could not be deleted at all, and the message blamed the
+    # endpoint rather than naming the real gap.
     object_crud = {"company": companies, "deal": deals,
+                   "contact": contacts,
                    }.get(row_object_type)
     if object_crud is None:
         return _fail("That attribute is on an object this endpoint cannot check.")

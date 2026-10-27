@@ -35,8 +35,8 @@ API_ROOT_PATH = "/api/v1"
 #: what `scripts/check_crm_contract.py` counts in the monolith today. The
 #: health endpoint reports the live numbers beside these, so a half-finished
 #: move is visible rather than assumed.
-EXPECTED_ROUTERS = 12
-EXPECTED_ENDPOINTS = 83
+EXPECTED_ROUTERS = 13
+EXPECTED_ENDPOINTS = 91
 
 #: ⚠️ FOR COUNTING ONLY. The mounts themselves are the sixteen literal
 #: `include_router` calls in `_mount()`; this table must not grow into a loop
@@ -45,6 +45,7 @@ EXPECTED_ENDPOINTS = 83
 #: hard-coded integer.
 _MOUNT_TABLE = (
     ("pipelines.router", "pipelines"), ("companies.router", "companies"),
+    ("contacts.router", "contacts"),
     ("deals.router", "deals"), ("crm_settings.router", "settings"),
     ("attributes.router", "attributes"),
     ("view_preferences.router", "view_preferences"),
@@ -317,8 +318,8 @@ async def ready():
 # so that app creation cannot be broken by an import cycle in a moved module.
 def mount_crm_routers() -> None:
     from app.routes import (                     # pylint: disable=import-outside-toplevel
-        attributes, companies, deals, exports, files, imports, notes,
-        pipelines, saved_views, settings as crm_settings, tasks,
+        attributes, companies, contacts, deals, exports, files, imports,
+        notes, pipelines, saved_views, settings as crm_settings, tasks,
         view_preferences,
     )
 
@@ -404,6 +405,19 @@ def mount_crm_routers() -> None:
             tags=["CRM Notes"],
         )
 
+    # ⚠️ A LITERAL `include_router` CALL INSIDE THE GATE, like every one above.
+    # `scripts/check_crm_contract.py` reads these by AST to recover each
+    # router's mount prefix; a loop over a table broke that once, and a router
+    # whose prefix cannot be read is reported at a GUESSED `/crm/<module>`
+    # instead — which is how the `settings as crm_settings` alias bug stayed
+    # invisible for as long as it did.
+    if "contacts" in modules:
+        app.include_router(
+            contacts.router,
+            prefix=f"{API_ROOT_PATH}/crm/contacts",
+            tags=["CRM Contacts"],
+        )
+
     if "exports" in modules:
         app.include_router(
             exports.router,
@@ -459,18 +473,6 @@ def mount_crm_routers() -> None:
     # nginx sends `/api/v1/crm/` here from the public hostname. This endpoint
     # takes an account id and acts on it with no end-user token in the
     # request — it is called by the platform, after the platform's own
-    # permission check — so it must sit behind the same `/api/v1/internal/`
-    # deny rule as the platform's auth endpoint, not in the public CRM path.
-    #
-    # It is also why the documented surface is unchanged:
-    # `scripts/check_crm_contract.py` counts endpoints under `/crm` only, so
-    # this one is deliberately invisible to it. An internal endpoint in the
-    # public contract is an invitation.
-    from app.routes import internal           # pylint: disable=import-outside-toplevel
-
-    app.include_router(internal.router,
-                       prefix=f"{API_ROOT_PATH}/internal",
-                       tags=["Internal"])
 
     global MOUNTED_MODULES, MOUNTED_ROUTERS    # pylint: disable=global-statement
     # ⚠️ COUNTED, NOT HARD-CODED. These were the literals 16 and 12, which was

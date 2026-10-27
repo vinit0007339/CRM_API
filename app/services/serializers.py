@@ -126,6 +126,7 @@ def company_payload(
     owner_index: Dict[str, Any] = None,
     tag_index: Dict[str, Any] = None,
     linked_contacts: Optional[Dict[str, Any]] = None,
+    linked_crm_contacts: Optional[Dict[str, Any]] = None,
     linked_deals: Optional[Dict[str, Any]] = None,
     duplicate_warning: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -144,6 +145,13 @@ def company_payload(
 
     if linked_contacts is not None:
         payload["linked_contacts"] = linked_contacts
+    # ⚠️ `is not None`, NOT truthiness — the same test as its siblings. A
+    # company with zero CRM contacts must serialise `{"data": [], "total": 0}`
+    # so the section renders empty; omitting the key makes the UI read it as
+    # "this endpoint doesn't report CRM contacts" and hide the section
+    # entirely, which looks identical to the feature not being deployed.
+    if linked_crm_contacts is not None:
+        payload["linked_crm_contacts"] = linked_crm_contacts
     if linked_deals is not None:
         payload["linked_deals"] = linked_deals
     if duplicate_warning is not None:

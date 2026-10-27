@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-OBJECT_TYPES = ("company", "deal")
+OBJECT_TYPES = ("company", "deal", "contact")
 
 # Columns that cannot be removed: the one that opens the record.
 #
@@ -40,6 +40,11 @@ OBJECT_TYPES = ("company", "deal")
 LOCKED_BY_OBJECT: Dict[str, Tuple[str, ...]] = {
     "company": ("name",),
     "deal": ("name",),
+    # ⚠️ PER OBJECT TYPE, BECAUSE A CONTACT'S IS NOT `name`. A CRM contact has
+    # `first_name` / `last_name` and a denormalised `full_name`; locking `name`
+    # would lock a column that does not exist on it, so nothing would be locked
+    # and the picker could remove the only cell that links into the row.
+    "contact": ("full_name",),
 }
 
 # Back-compat: the original module-level constant, which was company/deal only.
@@ -75,6 +80,17 @@ DERIVED_COLUMNS: Dict[str, Tuple[Tuple[str, str], ...]] = {
         ("last_activity_at", "Last activity"),
         ("created_at", "Created"),
     ),
+    "contact": (
+        # `full_name` is denormalised, not an attribute: it is derived from
+        # first/last/email in `contact_rules.display_name` and no account can
+        # edit it directly, but the list cannot render without it.
+        ("full_name", "Name"),
+        ("primary_company_name", "Company"),
+        ("deal_count", "Deals"),
+        ("open_deal_value", "Open value"),
+        ("last_activity_at", "Last activity"),
+        ("created_at", "Created"),
+    ),
 }
 
 # Exactly what the two list views hard-coded before this epic, so a user who
@@ -88,6 +104,8 @@ DEFAULT_COLUMNS: Dict[str, Tuple[str, ...]] = {
                 "last_activity_at"),
     "deal": ("name", "stage_name", "amount", "owner_id",
              "expected_close_date", "status", "last_activity_at"),
+    "contact": ("full_name", "email", "job_title", "primary_company_name",
+                "lifecycle_stage", "owner_id", "last_activity_at"),
 }
 
 # Columns a list can show but an export cannot produce. `stage_name` is

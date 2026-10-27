@@ -105,13 +105,30 @@ def mount_prefixes() -> dict[tuple[str, str], str]:
     # every one a phantom (`/crm/saved_views` guessed from the module name
     # instead of the real `/crm/saved-views`). A checker that fails loudly for
     # the wrong reason gets switched off, so it reads both shapes.
+    # ⚠️ BY AST, NOT REGEX — AND THE REGEX IT REPLACED WAS SILENTLY WRONG.
+    # The old pattern `^\s+(\w+) as (\w+),?$` required the alias to be the
+    # ONLY name on its line. `app/main.py` writes it inline:
+    #
+    #     pipelines, saved_views, settings as crm_settings, tasks,
+    #
+    # so the alias never matched; the plain-name pass then skipped
+    # `settings as crm_settings` because it is not an identifier, and
+    # `settings` ended up with no mount prefix at all. That stayed invisible
+    # because `real_surface` fell back to a GUESSED `/crm/<module>` prefix,
+    # which for this one module happens to be the right answer — so the
+    # checker passed on a lookup that had failed. It only surfaced when the
+    # fallback was removed, and then it read as "settings is not mounted",
+    # which is the opposite of true.
+    #
+    # Two lessons the rest of this file already states: a prefix recovered by
+    # guessing is not a prefix that was read, and an import is a parse tree,
+    # not a line of text.
     aliases: dict[str, str] = {}
-    for module, alias in re.findall(r"^\s+(\w+) as (\w+),?$", text, re.M):
-        aliases[module] = alias                      # `deals as crm_deals`
-    for line in re.findall(r"^\s+([\w, ]+?),?$", text, re.M):
-        for name in (n.strip() for n in line.split(",")):
-            if name and name.isidentifier() and name not in aliases:
-                aliases.setdefault(name, name)       # plain `deals,`
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").endswith(
+                "routes"):
+            for name in node.names:
+                aliases[name.name] = name.asname or name.name
 
     by_alias_router: dict[tuple[str, str], str] = {}
     for alias, router, prefix in re.findall(
@@ -225,6 +242,17 @@ def real_surface() -> list[dict]:
                     "module": module,
                     "method": attr.upper(),
                     "path": f"{mount or f'/crm/{module}'}{route}",
+                    # ⚠️ A ROUTER WITH NO `include_router` CALL EXPOSES
+                    # NOTHING, and the line above invents `/crm/<module>` for
+                    # it. That fallback used to make an unmounted router look
+                    # shipped: its routes were compared against the contract,
+                    # reported as undocumented drift, and the run failed —
+                    # while the endpoints were unreachable and documenting
+                    # them would have made the contract lie. Recorded here and
+                    # reported separately in `main`, so "defined but not
+                    # mounted" is a stated fact rather than either a silent
+                    # omission or a false failure.
+                    "mounted": mount is not None,
                     "permission": permission_of(node, constants),
                     "response": response,
                     "handler": node.name,
@@ -340,14 +368,20 @@ def main() -> int:
     if args.list:
         for row in sorted(surface, key=lambda r: (r["path"], r["method"])):
             perm = row["permission"] or "⚠️ UNKNOWN"
+            flag = "" if row["mounted"] else "  [NOT MOUNTED]"
             print(f"{row['method']:<7} {row['path']:<46} {perm:<34} "
-                  f"{row['response'] or '—'}")
-        print(f"\n{len(surface)} endpoints across "
-              f"{len({r['module'] for r in surface})} routers")
+                  f"{row['response'] or '—'}{flag}")
+        live = [r for r in surface if r["mounted"]]
+        print(f"\n{len(live)} endpoints across "
+              f"{len({r['module'] for r in live})} routers")
+        if len(live) != len(surface):
+            print(f"{len(surface) - len(live)} further route(s) are defined "
+                  f"but not mounted, and expose nothing")
         return 0
 
     if args.emit:
-        print(emit_markdown(surface))
+        # Only the live API belongs in the contract.
+        print(emit_markdown([r for r in surface if r["mounted"]]))
         return 0
 
     contract = find_contract()
@@ -358,17 +392,21 @@ def main() -> int:
         return 1
 
     docs = documented(contract)
-    real = {(r["method"], canonical(r["path"])) for r in surface}
+    # The contract documents the LIVE API, so only mounted routes are compared
+    # against it. Unmounted ones are reported below instead.
+    mounted = [r for r in surface if r["mounted"]]
+    unmounted = [r for r in surface if not r["mounted"]]
+    real = {(r["method"], canonical(r["path"])) for r in mounted}
 
     undocumented = sorted(real - docs)
     # A documented path that no longer exists. Worse than an undocumented one:
     # somebody will write a client against it.
     phantom = sorted(docs - real)
-    ungated = [r for r in surface if not r["permission"]]
+    ungated = [r for r in mounted if not r["permission"]]
 
     print(f"contract: {contract}")
     print(f"real surface: {len(real)} endpoints across "
-          f"{len({r['module'] for r in surface})} routers")
+          f"{len({r['module'] for r in mounted})} routers")
     print(f"documented:   {len(docs)}")
     print()
 
@@ -379,6 +417,19 @@ def main() -> int:
                          if r["method"] == method and canonical(r["path"]) == path)
             print(f"    {method:<7} {match['path']:<44} "
                   f"({match['permission'] or '⚠️ no permission found'})")
+        print()
+
+    if unmounted:
+        modules = sorted({r["module"] for r in unmounted})
+        print(f"ℹ️ {len(unmounted)} route(s) DEFINED BUT NOT MOUNTED "
+              f"({', '.join(modules)}):")
+        print("    They expose nothing and are not compared against the")
+        print("    contract. Either mount them in app/main.py's _MOUNT_TABLE")
+        print("    and document them, or delete them — a route module nobody")
+        print("    mounts is the shape a half-finished wiring job leaves.")
+        for row in sorted(unmounted, key=lambda r: (r["path"], r["method"])):
+            print(f"    {row['method']:<7} {row['path']:<44} "
+                  f"({row['module']}.{row['handler']})")
         print()
 
     if phantom:

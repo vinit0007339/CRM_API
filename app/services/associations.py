@@ -23,7 +23,15 @@ from __future__ import annotations
 from typing import Any, Tuple
 
 # Lower number wins the "from" slot.
-_PRECEDENCE = {"company": 0, "deal": 1, "contact": 2}
+# ⚠️ KEEP IN STEP WITH `AssociationEntity`. This module is stdlib-only by
+# design — "No Beanie, no Motor, no pydantic" — so it cannot import the enum
+# and holds its own copy of the ordering. `scripts/check_invariants.py` asserts
+# the two agree, and it caught exactly this entry being missed when
+# `crm_contact` was added.
+#
+# `crm_contact` ranks last, so a company/deal always wins the `from` slot and a
+# CRM contact normalises into `to` — the same shape as a platform contact.
+_PRECEDENCE = {"company": 0, "deal": 1, "contact": 2, "crm_contact": 3}
 
 
 class InvalidAssociation(ValueError):

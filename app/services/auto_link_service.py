@@ -18,6 +18,19 @@ new domain's company; the old one stays. Removing it would be the system
 deleting a relationship a person may have curated — someone who moved from one
 customer to another is genuinely connected to both — and an extra link is
 visible and deletable, while a missing one is not.
+
+
+⚠️ NO CALLER AS OF PHASE 4a, AND THAT IS A STATED GAP, NOT AN OVERSIGHT. The
+only thing that drove this was `POST /api/v1/internal/crm/auto-link`, which
+phase 4a deleted along with the platform hook that called it: creating a
+MARKETING contact no longer reaches into the CRM. Domain-based company linking
+is still wanted — phase 5 drives it from `POST /crm/contacts`, where the
+contact being linked is the CRM's own.
+
+Kept rather than deleted-and-restored because phase 5 is next and the churn
+would be pure. But `aee58ca`'s lesson applies and is worth repeating here:
+"Dead code that still imports cleanly gets called again." If phase 5 changes
+shape and this ends up with no caller after it, delete it.
 """
 from __future__ import annotations
 

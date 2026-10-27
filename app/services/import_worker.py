@@ -26,7 +26,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from app.config import logger as _logger
+from app.config import logger as _logger, settings
 from app import foreign
 from app.models.company import CompanyModel
 from app.models.deal import DealModel
@@ -514,6 +514,33 @@ class ImportRunner:
                 return session
         return None
 
+    def _crm_contacts(self):
+        """`CrmContactCrud`, built once.
+
+        ⚠️ CACHED, BECAUSE THIS IS CALLED PER ROW. `_find_note_target` runs for
+        every reference column of every row; constructing a CRUD object five
+        thousand times is pointless work in the hot path of an import. The
+        route may also pass one in — `__init__` already accepts `contacts=`,
+        left over from when the CRM owned this object — so that is preferred
+        when present.
+        """
+        if self.contacts is not None:
+            return self.contacts
+        if getattr(self, "_crm_contacts_crud", None) is None:
+            from app.crud.contact import CrmContactCrud
+
+            self._crm_contacts_crud = CrmContactCrud(self._db())
+        return self._crm_contacts_crud
+
+    async def _crm_contact_by_email(self, raw: str):
+        from app.services import contact_rules as cr
+
+        address = cr.normalize_email(raw)
+        if not address:
+            return None
+        return await self._crm_contacts().by_email(
+            account_id=self.account_id, email=address)
+
     async def _find_note_target(self, field: str, raw: str):
         """One reference column's record, or None.
 
@@ -528,6 +555,22 @@ class ImportRunner:
         globally unique and its rows are shared between accounts, so an
         unscoped lookup would attach a note to another tenant's person.
         """
+        if field == "contact_email" and settings.contacts_source == "crm":
+            # ⚠️ NORMALISE, THEN MATCH EXACTLY — the opposite of the platform
+            # branch below. `crm_contacts.email` is stored lowercased by
+            # `contact_rules.normalize_email` and the unique index is on that
+            # value, so `CrmContactCrud.by_email` requires a normalised
+            # address and a case-insensitive regex would be both slower and
+            # wrong (it would match outside the index).
+            return await self._crm_contact_by_email(raw)
+        if field == "contact_id" and settings.contacts_source == "crm":
+            try:
+                return await self._crm_contacts().get_scoped(
+                    self.account_id, raw)
+            except Exception:  # pylint: disable=broad-except
+                # Same rule as the company/deal branch below: an unparseable
+                # cell is an unresolved reference, not a crash.
+                return None
         if field == "contact_email":
             # ⚠️ CASE-INSENSITIVE, UNLIKE A CRM LOOKUP. `Contact.email` is
             # deliberately NOT lowercased on write — it carries a unique index

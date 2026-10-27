@@ -55,6 +55,20 @@ SYSTEM_FIELDS: Dict[str, Dict[str, str]] = {
         "has_open_task": "boolean", "has_overdue_task": "boolean",
         "next_activity_at": "datetime",
     },
+    "contact": {
+        "email": "email", "first_name": "text", "last_name": "text",
+        "full_name": "text", "phone": "phone", "job_title": "text",
+        "linkedin_url": "url", "lifecycle_stage": "single_select",
+        "description": "textarea", "owner_id": "user",
+        "primary_company_name": "text", "source": "text",
+        "deal_count": "number", "open_deal_value": "currency",
+        "is_archived": "boolean", "created_at": "datetime",
+        "updated_at": "datetime", "last_activity_at": "datetime",
+        # Activity, derived — see DERIVED_FIELDS. No `next_activity_at`:
+        # CrmContactModel does not keep one, and offering a field the record
+        # has no column for would filter every contact out.
+        "has_open_task": "boolean", "has_overdue_task": "boolean",
+    },
     "deal": {
         "name": "text", "amount": "number", "currency": "text",
         "expected_close_date": "date", "actual_close_date": "date",

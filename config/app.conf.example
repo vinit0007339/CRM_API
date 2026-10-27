@@ -43,6 +43,16 @@ platform_base_url = http://127.0.0.1:8000
 ; second of two locks; the first is the nginx deny rule.
 ; internal_key = change-me
 
+; Which collection the NOTE IMPORTER's `contact_id` / `contact_email` columns
+; resolve against: `platform` (the marketing audience) or `crm` (crm_contacts).
+;
+; It does NOT affect a company's Contacts tab: association rows carry
+; `to_type = contact` or `crm_contact`, so each id resolves from exactly one
+; collection and both populations are shown. No migration is involved.
+;
+; Anything other than the exact word `crm` means `platform`.
+; contacts_source = platform
+
 ; Seconds. This call sits in front of every request, so a slow platform must
 ; fail fast and visibly rather than holding workers.
 introspect_timeout = 3.0

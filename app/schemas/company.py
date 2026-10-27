@@ -130,6 +130,12 @@ class CompanyDetails(BaseModel):
     # Present on the single-record endpoint only (first 20 each + true total),
     # so one request paints the whole detail page.
     linked_contacts: Optional[LinkedCollection] = None
+    #: CRM-owned people, from `crm_contacts`. A separate collection in the
+    #: payload because they are a separate population: a CRM contact is NOT
+    #: marketable, and merging the two lists would invite a client to email
+    #: someone who never consented. Omitted (None) on the list endpoint, like
+    #: its siblings.
+    linked_crm_contacts: Optional[LinkedCollection] = None
     linked_deals: Optional[LinkedCollection] = None
 
     # Set on CREATE when a probable duplicate exists. Non-blocking.
@@ -157,6 +163,12 @@ class CompanyListResponse(BaseModel):
 
 
 class CompanyLinksRequest(BaseModel):
+    #: ⚠️ A FIELD OF ITS OWN, NOT MIXED INTO `contact_ids`. The two carry ids
+    #: from different collections — `contacts` and `crm_contacts` — and a
+    #: single list would make the row's meaning depend on which screen posted
+    #: it, which is the ambiguity `AssociationEntity.CRM_CONTACT` exists to
+    #: remove. Both default to empty, so every existing client is unaffected.
+    crm_contact_ids: List[PyObjectId] = []
     """POST = additive, DELETE = subtractive. Never a replace."""
 
     contact_ids: List[PyObjectId] = []

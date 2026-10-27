@@ -112,9 +112,30 @@ SYSTEM_DEAL_ATTRIBUTES = [
 # Accounts that already defined contact attributes keep those rows; nothing
 # deletes them. `scripts/migrate_crm_contacts_removal.py` reports them.
 
+# E25, restored with the contacts object.
+#
+# ⚠️ NEITHER `email` NOR A NAME IS `is_required`. A phone-only lead from a
+# trade show is a real contact, and `contact_rules.has_identity` enforces the
+# real rule — a name OR an address — which no single required field can
+# express. Marking email required here would block that lead at the form and
+# at import; marking first_name required would block `support@acme.com`.
+SYSTEM_CONTACT_ATTRIBUTES = [
+    ("first_name",      "First name",      "text",          False),
+    ("last_name",       "Last name",       "text",          False),
+    ("email",           "Email",           "email",         False),
+    ("phone",           "Phone",           "phone",         False),
+    ("job_title",       "Job title",       "text",          False),
+    ("lifecycle_stage", "Lifecycle stage", "single_select", False),
+    ("linkedin_url",    "LinkedIn",        "url",           False),
+    ("owner_id",        "Owner",           "user",          False),
+    ("description",     "Description",     "textarea",      False),
+]
+
+
 SYSTEM_ATTRIBUTES_BY_OBJECT = {
     "company": SYSTEM_COMPANY_ATTRIBUTES,
     "deal": SYSTEM_DEAL_ATTRIBUTES,
+    "contact": SYSTEM_CONTACT_ATTRIBUTES,
 }
 
 # ⚠️ EVERY caller that iterates object types must derive them from HERE.

@@ -56,9 +56,16 @@ COMPANY_ACTIONS = ("set_owner", "set_attribute", "add_tags", "remove_tags",
 DEAL_ACTIONS = ("set_owner", "set_attribute", "move_pipeline", "add_tags",
                 "remove_tags", "delete")
 
+# E25. The same set as companies: a contact has no pipeline to move between.
+# Spelled out rather than inherited from companies, so adding a fourth object
+# cannot silently acquire whatever companies happen to allow.
+CONTACT_ACTIONS = ("set_owner", "set_attribute", "add_tags", "remove_tags",
+                   "archive", "delete")
+
 ACTIONS_BY_ENTITY = {
     "company": COMPANY_ACTIONS,
     "deal": DEAL_ACTIONS,
+    "contact": CONTACT_ACTIONS,
 }
 
 # Why a record was skipped. Kept apart because they are three different

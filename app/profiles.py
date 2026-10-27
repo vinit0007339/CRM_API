@@ -41,8 +41,8 @@ from typing import Dict, FrozenSet
 #: this and `scripts/check_crm_contract.py` reads it, so a fourteenth module
 #: cannot be half-wired.
 ALL_MODULES: FrozenSet[str] = frozenset({
-    "attributes", "companies", "deals", "exports", "files", "imports",
-    "notes", "pipelines", "saved_views", "settings", "tasks",
+    "attributes", "companies", "contacts", "deals", "exports", "files",
+    "imports", "notes", "pipelines", "saved_views", "settings", "tasks",
     "view_preferences",
 })
 
@@ -68,8 +68,13 @@ PROFILES: Dict[str, FrozenSet[str]] = {
     # the import wizard, export jobs, and files with signed downloads — each
     # of which is a feature a new consumer can ask for later rather than a
     # thing it must understand on day one.
+    # ⚠️ `contacts` IS IN `core`, AND THAT IS A JUDGEMENT, NOT AN OVERSIGHT.
+    # A CRM a consumer cannot add a person to is not a core CRM: companies and
+    # deals with no people on them is a pipeline tracker. Drop it from here if
+    # a consumer genuinely wants records without people — nothing else in
+    # `core` depends on it.
     "core": frozenset({
-        "companies", "deals", "pipelines", "notes", "tasks",
+        "companies", "contacts", "deals", "pipelines", "notes", "tasks",
         "settings", "attributes",
     }),
 

@@ -27,6 +27,15 @@ SYSTEM_FIELDS = {
         "phone_country_code", "description",
     },
     "deal": {"name", "amount", "currency", "expected_close_date", "description"},
+    # E25, restored with the contacts object. These are TYPED COLUMNS on
+    # CrmContactModel, so a custom value under one of these names must route to
+    # the column and not into `custom_fields` — which is the whole job of this
+    # map. `full_name` is absent on purpose: it is derived by
+    # `contact_rules.display_name` and no account may write it.
+    "contact": {
+        "email", "first_name", "last_name", "phone", "phone_country_code",
+        "job_title", "linkedin_url", "lifecycle_stage", "description",
+    },
 }
 
 # How each TYPED COLUMN's value must be coerced on the no-definitions path.

@@ -673,26 +673,55 @@ rewrite those paths, repoint `contact_id` across five collections — affecting
 campaigns, lists, segments and bounce handling, not just the CRM. It is tracked
 as CRM-P2-000 and is not part of this epic.
 
-⚠️ **AND THE CRM NO LONGER HAS A PEOPLE OBJECT AT ALL.** The whole
-`/crm/contacts` router is gone as of 23 Oct 2026 — ~~`GET /crm/contacts`~~,
-~~`POST /crm/contacts`~~, ~~`GET /crm/contacts/{id}`~~,
-~~`PATCH /crm/contacts/{id}`~~, ~~`DELETE /crm/contacts/{id}`~~,
-~~`POST /crm/contacts/bulk`~~, ~~`GET /crm/contacts/filter-fields`~~,
-~~`GET /crm/contacts/{id}/activities`~~, and before them
-~~`POST /crm/contacts/{id}/link`~~ and ~~`DELETE /crm/contacts/{id}/link`~~ —
-together with the `crm_contacts` collection, the `contact` attribute object
-type, contact saved views and column layouts, and contact import.
+⚠️ **THE CRM HAS ITS OWN PEOPLE OBJECT AGAIN, AND THIS SECTION HAS NOW
+REVERSED TWICE.** `/crm/contacts` shipped (E25), was removed on 23 Oct 2026,
+and is restored here — the eight endpoints are in the generated table below.
+The removal's reasoning is kept above because it is still correct about the
+platform contact; what changed is the conclusion drawn from it.
 
-(Struck through deliberately: `check_crm_contract.py` reads a prose mention of
-an endpoint as a claim that it exists, and subtracts a struck-through one —
-which is how a contract gets to say "this is removed" without re-promising it.)
+The strike-through notes that used to sit here are gone with it. They were
+there because `check_crm_contract.py` reads a prose mention as a claim that an
+endpoint exists and subtracts a struck-through one — so leaving them would
+cancel the table rows below and the checker would report eight endpoints as
+undocumented while the document appeared to list them. If `/crm/contacts` is
+ever removed a third time, that is the mechanism to use.
 
-**THE APP HAS ONE CONTACTS LIST: the marketing audience**, at
-`/api/v1/contacts`. A company's or a deal's linked people are PLATFORM
-contacts, which is what the association endpoints always returned — so
-`GET /crm/companies/{id}/contacts` is unchanged, and `EntityPicker` searching
-the platform endpoint was always correct. **This settles CRM-406**: an
-association's contact side is a platform contact id.
+Two endpoints from the ORIGINAL object are still gone, and deliberately:
+~~`POST /crm/contacts/{id}/link`~~ and ~~`DELETE /crm/contacts/{id}/link`~~.
+They attached a CRM contact to a platform Contact, and that seam is what
+produced two populations of the same person with no rule about which was
+authoritative. A CRM contact is a `crm_contacts` row, full stop.
+
+**THERE ARE NOW TWO CONTACT LISTS, AND THEY ARE DIFFERENT THINGS.** The
+marketing audience at `/api/v1/contacts` is who you may email; `/crm/contacts`
+is who sales is working. A CRM contact is **not marketable** — it cannot be
+added to a list or emailed from the CRM. To market to one, it is imported into
+the audience as a contact in its own right, where it gets its own consent
+record.
+
+**CRM-406 is therefore answered, and by the row rather than by a rule.**
+`AssociationEntity` has two contact members:
+
+| `to_type` | `to_id` lives in | written by |
+|---|---|---|
+| `contact` | the platform `contacts` collection | everything up to 23 Oct 2026, and `EntityPicker` still |
+| `crm_contact` | the CRM's `crm_contacts` | the CRM's own screens, from now on |
+
+So there is no question to decide at read time and **no migration at all**:
+existing rows keep resolving against the platform, new ones against the CRM,
+and each id is looked up in exactly one collection. The ambiguity CRM-406 was
+parked on — *"a contact row could hold either a platform id or a CRM one
+depending on which screen wrote it"* — is removed by making the two cases
+different rows rather than by moving data.
+
+`GET /crm/companies/{id}/contacts` keeps its path and its meaning: platform
+contacts. The company detail payload gains `linked_crm_contacts` beside
+`linked_contacts`, and the company page shows both, labelled — they are two
+populations, and one of them cannot be emailed.
+
+`[CRM] contacts_source` survives only to tell the NOTE IMPORTER which
+population a `contact_email` column means; it does not affect any endpoint
+above.
 
 What is given up, stated plainly: **per-account CRM fields on a person** —
 owner, lifecycle stage, custom attributes, deal rollups. They have nowhere to
@@ -1205,14 +1234,13 @@ python3 scripts/check_crm_contract.py --emit   # regenerate the block below
 ```
 
 <!-- GENERATED: scripts/check_crm_contract.py --emit — do not edit by hand -->
-<!-- GENERATED: scripts/check_crm_contract.py --emit — do not edit by hand -->
 
 Every CRM endpoint the routers expose, with the permission that gates it
 and the response model it declares. Regenerate with
 `python3 scripts/check_crm_contract.py --emit`; verify with the same
 script and no flag, which fails on drift in either direction.
 
-**83 endpoints across 12 routers.**
+**91 endpoints across 13 routers.**
 
 #### Attributes
 
@@ -1251,6 +1279,19 @@ script and no flag, which fails on drift in either direction.
 | `DELETE` | `/crm/companies/{company_id}/links` | `companies:write` | `ResponseSchema` |
 | `POST` | `/crm/companies/{company_id}/links` | `companies:write` | `ResponseSchema` |
 | `POST` | `/crm/companies/{company_id}/unmerge` | `companies:write` | `ResponseSchema` |
+
+#### Contacts
+
+| Method | Path | Permission | Response model |
+|---|---|---|---|
+| `GET` | `/crm/contacts` | `contacts:read` | `ContactListResponse` |
+| `POST` | `/crm/contacts` | `contacts:write` | `ResponseSchema[ContactDetails]` |
+| `POST` | `/crm/contacts/bulk` | `contacts:write` | `ResponseSchema[BulkActionResult]` |
+| `GET` | `/crm/contacts/filter-fields` | `contacts:read` | `ResponseSchema` |
+| `DELETE` | `/crm/contacts/{contact_id}` | `contacts:write` | `ResponseSchema` |
+| `GET` | `/crm/contacts/{contact_id}` | `contacts:read` | `ResponseSchema[ContactDetails]` |
+| `PATCH` | `/crm/contacts/{contact_id}` | `contacts:write` | `ResponseSchema[ContactDetails]` |
+| `GET` | `/crm/contacts/{contact_id}/activities` | `contacts:read` | `ResponseSchema` |
 
 #### Deals
 
@@ -1357,9 +1398,6 @@ script and no flag, which fails on drift in either direction.
 | `PATCH` | `/crm/tasks/{task_id}` | `crm_tasks:write` | `ResponseSchema[TaskDetails]` |
 | `POST` | `/crm/tasks/{task_id}/complete` | `crm_tasks:write` | `ResponseSchema[TaskDetails]` |
 
-<!-- /GENERATED -->
-<!-- /GENERATED -->
-<!-- /GENERATED -->
 <!-- /GENERATED -->
 
 ---

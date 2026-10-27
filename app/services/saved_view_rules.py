@@ -35,7 +35,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.services import filter_rules
 
-OBJECT_TYPES = ("company", "deal")
+OBJECT_TYPES = ("company", "deal", "contact")
 
 NAME_MAX = 60
 # Per account per object type. A toolbar stops being navigable long before

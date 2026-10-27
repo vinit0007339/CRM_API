@@ -54,7 +54,24 @@ class AssociationEntity(str, Enum):
 
     COMPANY = "company"
     DEAL = "deal"
+    #: A PLATFORM contact — the marketing audience. Every association row
+    #: written before the CRM regained its own people object holds one of
+    #: these, and they are left exactly as they are.
     CONTACT = "contact"
+    #: ⚠️ A CRM-OWNED CONTACT, AND A SEPARATE MEMBER ON PURPOSE. Reusing
+    #: `contact` for both would mean a row's `to_id` could belong to either
+    #: `contacts` or `crm_contacts` with nothing in the row to say which —
+    #: which is precisely what `aee58ca` identified as the problem ("a contact
+    #: row could hold either a platform id or a CRM one depending on which
+    #: screen wrote it") and what CRM-406 was parked on. A second member
+    #: decides it per row, with no migration and no guessing.
+    #:
+    #: ⚠️ APPENDED, NEVER INSERTED. Member order defines the canonical storage
+    #: direction and the docstring above says reordering orphans existing rows.
+    #: `app/services/associations.py::_PRECEDENCE` is a second copy of this
+    #: ordering and must gain the same entry — `scripts/check_invariants.py`
+    #: fails if it does not.
+    CRM_CONTACT = "crm_contact"
 
 
 class AttributeType(str, Enum):

@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Path, Query
 
-from app.config import logger as _logger
+from app.config import logger as _logger, settings
 from app.crud import (
     CompanyCrud, CrmActivityCrud, CrmAssociationCrud, CrmAttributeCrud, DealCrud,
 )
@@ -373,11 +373,17 @@ async def get_company(
     contact_ids = await assoc.counterparts(
         account_id=account_id, entity_type="company", entity_id=company.id,
         want_type="contact")
+    crm_contact_ids = await assoc.counterparts(
+        account_id=account_id, entity_type="company", entity_id=company.id,
+        want_type="crm_contact")
     deal_ids = await assoc.counterparts(
         account_id=account_id, entity_type="company", entity_id=company.id,
         want_type="deal")
 
-    contacts = await _fetch_contacts(crud, contact_ids[:LINKED_PREVIEW])
+    contacts = await _fetch_contacts(crud, account_id,
+                                     contact_ids[:LINKED_PREVIEW])
+    crm_contacts = await _fetch_crm_contacts(crud, account_id,
+                                             crm_contact_ids[:LINKED_PREVIEW])
     deal_rows = await deals.list_by(
         {"created_by": account_id, "_id": {"$in": deal_ids[:LINKED_PREVIEW]}},
         limit=LINKED_PREVIEW,
@@ -387,6 +393,8 @@ async def get_company(
     data = CompanyDetails.model_validate(sz.company_payload(
         company, owner_index=owner_index, tag_index=tag_index,
         linked_contacts=sz.linked_collection(contacts, len(contact_ids), sz.contact_ref),
+        linked_crm_contacts=sz.linked_collection(
+            crm_contacts, len(crm_contact_ids), sz.contact_ref),
         linked_deals=sz.linked_collection(
             deal_rows, len(deal_ids),
             lambda d: {"id": d.id, "name": d.name, "amount": d.amount,
@@ -398,9 +406,57 @@ async def get_company(
     return _ok(data)
 
 
-async def _fetch_contacts(crud: CompanyCrud, contact_ids: List[Any]) -> List[Any]:
-    """A company's Contacts tab. The rows are PLATFORM contacts — see
-    `app/foreign.py`, including why this particular read is not re-scoped."""
+async def _fetch_crm_contacts(crud: CompanyCrud, account_id: Any,
+                              ids: List[Any]) -> List[Any]:
+    """A company's CRM-owned people, from `crm_contacts`.
+
+    ⚠️ A SEPARATE FUNCTION AND A SEPARATE ASSOCIATION TYPE, so neither
+    collection is ever searched for an id that belongs to the other. There is
+    no backfill: rows written before the CRM regained its people object stay
+    `to_type="contact"` and keep resolving against the platform, and nothing
+    has to guess which an id is — the row says so.
+
+    Scoped, because `crm_contacts` rows are per-account and every other `crm_*`
+    read in this service is scoped by construction.
+    """
+    if not ids:
+        return []
+    from app.crud.contact import CrmContactCrud
+
+    contacts = CrmContactCrud(crud.db_session)
+    return await contacts.list_by(
+        {"created_by": contacts.oid(account_id), "_id": {"$in": list(ids)}},
+        limit=len(ids))
+
+
+async def _fetch_contacts(crud: CompanyCrud, account_id: Any,
+                          contact_ids: List[Any]) -> List[Any]:
+    """A company's PLATFORM contacts — the `to_type="contact"` side.
+
+    ⚠️ NO BRANCH AND NO MIGRATION. An earlier version switched collections on
+    `contacts_source`, because the plan was a backfill that would copy every
+    platform contact into `crm_contacts` under the same `_id`. That backfill is
+    not happening and the script is gone. `AssociationEntity` gained a
+    `crm_contact` member instead, so an id reaching this function came off a
+    `contact` row and belongs to the platform by definition — there is nothing
+    to decide. CRM-owned people come through `_fetch_crm_contacts`.
+
+    ⚠️ AND THIS ONE IS NOT ACCOUNT-SCOPED, WHERE ITS SIBLING IS.
+    `foreign.contacts_by_ids` is an EXPANSION, and `app/foreign.py` explains
+    why expansions are deliberately unscoped: the ids come from this account's
+    own association rows, so they are already its own. `_fetch_crm_contacts`
+    scopes anyway, because `crm_contacts` rows are per-account and every other
+    `crm_*` read in this service is scoped by construction.
+    """
+    # ⚠️ THIS READS THE PLATFORM, ALWAYS, AND NO LONGER BRANCHES ON
+    # `contacts_source`. Phase 3 had it switch collections because the plan was
+    # a backfill that would move every id into `crm_contacts`. There is no
+    # backfill: `to_type` now distinguishes the two, so an id that arrived here
+    # came off a `contact` row and belongs to the platform by definition.
+    # Looking it up in `crm_contacts` would be searching the wrong collection
+    # on purpose. CRM-owned people come through `_fetch_crm_contacts`.
+    if not contact_ids:
+        return []
     return await foreign.contacts_by_ids(crud.db_session, contact_ids)
 
 
@@ -567,6 +623,13 @@ async def _mutate_links(payload, company_id, ctx, crud, assoc, activity, *, atta
             kwargs["actor_user_id"] = ctx.user.id
         if await op(**kwargs):
             changed += 1
+    for crm_contact_id in getattr(payload, "crm_contact_ids", None) or []:
+        kwargs = dict(account_id=account_id, from_type="company", from_id=company.id,
+                      to_type="crm_contact", to_id=crm_contact_id)
+        if attach:
+            kwargs["actor_user_id"] = ctx.user.id
+        if await op(**kwargs):
+            changed += 1
     for deal_id in payload.deal_ids or []:
         kwargs = dict(account_id=account_id, from_type="company", from_id=company.id,
                       to_type="deal", to_id=deal_id)
@@ -604,7 +667,7 @@ async def company_contacts(
     ids = await assoc.counterparts(account_id=account_id, entity_type="company",
                                    entity_id=company_id, want_type="contact")
     page = ids[skip:skip + limit] if limit else []
-    rows = await _fetch_contacts(crud, page)
+    rows = await _fetch_contacts(crud, account_id, page)
     return _ok({"data": [sz.contact_ref(r) for r in rows], "total": len(ids)})
 
 

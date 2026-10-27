@@ -38,7 +38,7 @@ class Database:
 
 
 def _models() -> List[Any]:
-    """The 14 CRM documents, in the monolith's registration order.
+    """The 15 CRM documents, in the monolith's registration order.
 
     Imported inside a function, not at module scope: `app/foreign.py` and the
     models both import `app.config`, and a model importing `app.db` at import
@@ -55,6 +55,7 @@ def _models() -> List[Any]:
     from app.models.association import CrmAssociationModel
     from app.models.attribute import CrmAttributeModel
     from app.models.company import CompanyModel
+    from app.models.contact import CrmContactModel
     from app.models.deal import DealModel
     from app.models.export_run import CrmExportModel
     from app.models.file import CrmFileModel
@@ -71,6 +72,26 @@ def _models() -> List[Any]:
         CrmActivityModel, CrmSettingsModel, CrmAttributeModel, CrmNoteModel,
         CrmFileModel, CrmTaskModel, CrmImportModel, CrmExportModel,
         CrmViewPreferenceModel, CrmSavedViewModel,
+        # ⚠️ LAST, as `app/db/models/registry.py` had it before the object
+        # was removed — see the ordering note above. Restored in the same
+        # position rather than tucked in beside CompanyModel, so a diff
+        # against the monolith's registry still reads as identical.
+        #
+        # ⚠️ REGISTERING THIS CREATES ITS INDEXES, AND ONE OF THEM MAY
+        # CONFLICT. `crm_contacts` was never dropped — the removal migration
+        # deliberately destroyed nothing — so a database that carried the
+        # object still has the OLD `uniq_crm_contact_email`, built with
+        # `sparse=True`. `models/contact.py` now declares it partial, which
+        # is the same name with different options, and `create_indexes`
+        # answers that with IndexOptionsConflict. `allow_index_dropping` is
+        # False here (see below), so Beanie will not resolve it for us.
+        #
+        # The failure is survivable by design — `init_beanie` errors are
+        # logged and surface through /health/ready rather than crashing the
+        # process — but readiness stays red until the stale index is
+        # dropped. Run `scripts/check_crm_contact_index.py` BEFORE deploying
+        # this to any environment that ever had the collection.
+        CrmContactModel,
     ]
 
 

@@ -99,6 +99,25 @@ class Settings:
     #: a slow platform must fail fast and visibly rather than holding workers.
     introspect_timeout: float = 3.0
 
+    #: Which collection the NOTE IMPORTER's `contact_id` / `contact_email`
+    #: columns resolve against: "platform" (the marketing audience, read
+    #: through `app/foreign.py`) or "crm" (this service's own `crm_contacts`).
+    #:
+    #: ⚠️ NARROWER THAN IT WAS, AND THE REFERENCE IT USED TO CARRY IS GONE. It
+    #: switched the company Contacts tab as well, because the plan was a
+    #: backfill that would move every association id into `crm_contacts`, and
+    #: this note pointed at `scripts/backfill_crm_contacts.py` as the thing to
+    #: run first. There is no backfill and that script is deleted:
+    #: `AssociationEntity` gained a `crm_contact` member instead, so a row says
+    #: which collection its id belongs to and the tab reads both with no flag
+    #: at all.
+    #:
+    #: What is left is the one place a flag is still unavoidable — a CSV column
+    #: headed `contact_email` names a person, not a population, and only the
+    #: account knows which of the two it meant. `platform` keeps the behaviour
+    #: that shipped.
+    contacts_source: str = "platform"
+
     #: Whether THIS process runs the CRM task-reminder sweep.
     #:
     #: ⚠️ DEFAULT OFF, AND THAT IS THE SAFE DIRECTION. Exactly one process may
@@ -337,6 +356,14 @@ def _load(path: str) -> Settings:
         or get("CRM", "platform_base_url", None))
     settings.internal_key = (os.environ.get("CRM_INTERNAL_KEY", "").strip()
                              or get("CRM", "internal_key", None))
+    #: ⚠️ ANYTHING BUT THE EXACT WORD `crm` MEANS `platform`. A typo
+    #: ("CRM_", "crm_contacts", "true") must land on the behaviour that
+    #: shipped, not on the other population.
+    _source = (os.environ.get("CRM_CONTACTS_SOURCE", "").strip()
+               or get("CRM", "contacts_source", None) or "")
+    settings.contacts_source = "crm" if _source.strip().lower() == "crm" \
+        else "platform"
+
     #: Anything but an explicit truthy word is OFF — a typo must not silently
     #: start a second scheduler.
     _reminders = (os.environ.get("CRM_TASK_REMINDERS", "").strip()
