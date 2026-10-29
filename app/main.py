@@ -27,6 +27,9 @@ from app.errors import (
     AuthError, AuthNotConfiguredError, PermissionDeniedError,
 )
 from app.profiles import DEFAULT_PROFILE, modules_for
+# Only for `unified_override()` on /health — the one place the contact
+# unification switch is reported. See services/contact_scope.unified.
+from app.services import contact_scope
 
 #: The monolith's prefix, kept verbatim. See the module docstring.
 API_ROOT_PATH = "/api/v1"
@@ -35,8 +38,8 @@ API_ROOT_PATH = "/api/v1"
 #: what `scripts/check_crm_contract.py` counts in the monolith today. The
 #: health endpoint reports the live numbers beside these, so a half-finished
 #: move is visible rather than assumed.
-EXPECTED_ROUTERS = 13
-EXPECTED_ENDPOINTS = 91
+EXPECTED_ROUTERS = 14
+EXPECTED_ENDPOINTS = 97
 
 #: ⚠️ FOR COUNTING ONLY. The mounts themselves are the sixteen literal
 #: `include_router` calls in `_mount()`; this table must not grow into a loop
@@ -45,7 +48,7 @@ EXPECTED_ENDPOINTS = 91
 #: hard-coded integer.
 _MOUNT_TABLE = (
     ("pipelines.router", "pipelines"), ("companies.router", "companies"),
-    ("contacts.router", "contacts"),
+    ("contacts.router", "contacts"), ("reports.router", "reports"),
     ("deals.router", "deals"), ("crm_settings.router", "settings"),
     ("attributes.router", "attributes"),
     ("view_preferences.router", "view_preferences"),
@@ -142,11 +145,36 @@ async def lifespan(_: FastAPI):
         logger.info("CRM service down")
 
 
+# Interactive API docs (Swagger `/docs`, ReDoc `/redoc`, `/openapi.json`) are
+# served only outside production. This service had no docs setting at all, so
+# FastAPI's defaults applied and the whole endpoint surface was browsable
+# wherever it ran — the same hole `api/main.py` had on the platform side.
+#
+# ⚠️ AN ALLOW-LIST, NOT `!= "production"`, AND THE DIFFERENCE IS THE POINT.
+# The platform asks `get_current_config_section() != "PRODUCTION"`, which fails
+# OPEN: an unset, misspelt or renamed environment leaves the docs on, and the
+# one place you would not notice is production. Here an unrecognised value
+# turns them off — the same choice `_require_internal_key` makes about an unset
+# secret, for the same reason: a misconfiguration should fail visibly and
+# safely, not quietly and openly.
+#
+# `settings.environment` is documented as "stage" | "production" | "dev"
+# (`app/config.py:180`) and defaults to "dev". Until now it was only ever
+# REPORTED — in the startup line and in `/health` — and this is the first thing
+# that branches on it, so a typo that used to be cosmetic now closes the docs.
+# That is the right way round.
+_DOCS_ENVIRONMENTS = frozenset({"dev", "development", "local", "test",
+                                "stage", "staging"})
+_docs_on = str(settings.environment or "").strip().lower() in _DOCS_ENVIRONMENTS
+
 app = FastAPI(
     title="Engage CRM",
     version="0.1.0",
     description="The CRM module, extracted from emailMarketingAPI.",
     lifespan=lifespan,
+    docs_url="/docs" if _docs_on else None,
+    redoc_url="/redoc" if _docs_on else None,
+    openapi_url="/openapi.json" if _docs_on else None,
 )
 
 # ⚠️ CORS IS ON IN EVERY ENVIRONMENT, AND IT HAS TO BE.
@@ -267,6 +295,15 @@ async def health():
             "configured": bool(settings.task_reminders),
             "running": getattr(app.state, "task_reminder_task", None) is not None,
         },
+        # Contact unification, phase 3. `override` is the environment switch:
+        # "on" or "off" forces every account, null hands each account its own
+        # `crm_settings.unified_contacts`. Reported rather than inferred so
+        # "did the kill switch take?" is one curl against a running process,
+        # not a reading of the deploy. There is no per-account answer here —
+        # /health has no account — so that lives on GET /crm/settings.
+        "unified_contacts": {
+            "override": contact_scope.unified_override(),
+        },
     }
 
 
@@ -319,8 +356,8 @@ async def ready():
 def mount_crm_routers() -> None:
     from app.routes import (                     # pylint: disable=import-outside-toplevel
         attributes, companies, contacts, deals, exports, files, imports,
-        notes, pipelines, saved_views, settings as crm_settings, tasks,
-        view_preferences,
+        internal, notes, pipelines, reports, saved_views,
+        settings as crm_settings, tasks, view_preferences,
     )
 
     # ⚠️ SIXTEEN LITERAL CALLS, NOT A LOOP OVER A TABLE. The first version of
@@ -418,6 +455,15 @@ def mount_crm_routers() -> None:
             tags=["CRM Contacts"],
         )
 
+    # A literal call inside the gate, like every one above — the contract
+    # checker recovers each router's prefix from these by AST.
+    if "reports" in modules:
+        app.include_router(
+            reports.router,
+            prefix=f"{API_ROOT_PATH}/crm/reports",
+            tags=["CRM Reports"],
+        )
+
     if "exports" in modules:
         app.include_router(
             exports.router,
@@ -470,15 +516,42 @@ def mount_crm_routers() -> None:
 
     # ⚠️ THE INTERNAL ROUTER IS MOUNTED OUTSIDE `/crm`, ON PURPOSE.
     #
-    # nginx sends `/api/v1/crm/` here from the public hostname. This endpoint
-    # takes an account id and acts on it with no end-user token in the
-    # request — it is called by the platform, after the platform's own
+    # nginx sends `/api/v1/crm/` here from the public hostname. These endpoints
+    # take an account id and act on it with no end-user token in the
+    # request — they are called by the platform, after the platform's own
+    # permission check has already run, so the authorisation happened one
+    # service earlier. What stands in for the token is the shared secret plus
+    # the nginx deny rule, which is why `_require_internal_key` refuses when
+    # the secret is unset rather than running open.
+    #
+    # Two consequences of being outside `/crm`:
+    #
+    #   · `scripts/check_crm_contract.py` counts `/crm` only, so the documented
+    #     endpoint total is unaffected by anything in here — these are not part
+    #     of the CRM's public contract;
+    #   · it must never be reachable from a browser, which the prefix and the
+    #     deny rule are both halves of.
+    #
+    # ⚠️ NOT GATED ON A PROFILE, UNLIKE EVERY ROUTER ABOVE. A consumer that
+    # mounts `core` still has a platform calling it — the door is how the host
+    # talks to this service, not a CRM feature — and gating it would mean a
+    # deployment where lead capture silently does nothing.
+    app.include_router(
+        internal.router,
+        prefix=f"{API_ROOT_PATH}/internal",
+        tags=["Internal"],
+    )
 
     global MOUNTED_MODULES, MOUNTED_ROUTERS    # pylint: disable=global-statement
     # ⚠️ COUNTED, NOT HARD-CODED. These were the literals 16 and 12, which was
     # correct for exactly one profile. A number that is right for `full` and
     # silently wrong for `core` is worse than no number, because `/health`
     # reports it and the readiness check compares against it.
+    # ⚠️ PROFILE-GATED MOUNTS, NOT EVERY MOUNT. The internal router above is
+    # deliberately outside `_MOUNT_TABLE`, so this number — and the one
+    # `/health` reports — counts the CRM surface a profile selected, which is
+    # what the readiness check is actually comparing. Reading it as "routers
+    # attached to this app" would be off by one.
     MOUNTED_ROUTERS = sum(1 for _r, m in _MOUNT_TABLE if m in modules)
     MOUNTED_MODULES = len(modules)
 

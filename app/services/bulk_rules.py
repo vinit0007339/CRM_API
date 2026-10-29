@@ -33,8 +33,18 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 # call and time out halfway through.
 BULK_CAP = 1000
 
+# ⚠️ NO "archive" FOR ANY OBJECT ANY MORE. Archiving was removed on 29 Oct
+# 2026 at the product's request: a deleted record is deleted. Deals never had
+# it (see below); companies and contacts did, and it had become a one-way door
+# — an archived record left every list and there was no action that could then
+# remove it.
+#
+# ⚠️ SO `delete` IS NOW PERMANENT FOR EVERY OBJECT, and is restricted to an
+# account owner or `crm:manage_others` — the gate that used to guard `hard`.
+# A plain write grant can no longer destroy a record, because the recoverable
+# middle ground it used to have is gone.
 COMPANY_ACTIONS = ("set_owner", "set_attribute", "add_tags", "remove_tags",
-                   "archive", "delete")
+                   "delete")
 # ⚠️ NO "archive" FOR DEALS, AND THAT IS NOT AN OVERSIGHT. `DealModel` has no
 # `is_archived` field and `queries.deal_filter` has no parameter to hide one,
 # so there is nowhere for an archived deal to go: it would stay on the board,
@@ -60,7 +70,7 @@ DEAL_ACTIONS = ("set_owner", "set_attribute", "move_pipeline", "add_tags",
 # Spelled out rather than inherited from companies, so adding a fourth object
 # cannot silently acquire whatever companies happen to allow.
 CONTACT_ACTIONS = ("set_owner", "set_attribute", "add_tags", "remove_tags",
-                   "archive", "delete")
+                   "delete")
 
 ACTIONS_BY_ENTITY = {
     "company": COMPANY_ACTIONS,

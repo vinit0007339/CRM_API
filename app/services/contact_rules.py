@@ -235,10 +235,157 @@ def has_identity(values: Dict[str, Any]) -> bool:
                 or clean_name(values.get("last_name"))[0])
 
 
+#: Fields that describe the PERSON and live on the platform `contacts` row.
+#: The split rule, stated once: a fact about the person is here, a fact about
+#: this account's relationship with them is on the profile.
+PERSON_FIELDS = frozenset({
+    "email", "first_name", "last_name", "phone", "job_title", "linkedin_url",
+})
+
+#: Fields that describe THIS ACCOUNT'S RELATIONSHIP and live on the profile.
+#: `custom_fields` is here and not above on purpose: the platform contact has
+#: a `custom_fields` of its own holding zero-party FORM data keyed by form
+#: field name, and CRM attribute values are keyed by `internal_name`. Merging
+#: the namespaces would let one account's attribute overwrite another
+#: account's form answer — see the plan §2.
+PROFILE_FIELDS = frozenset({
+    "owner_id", "lifecycle_stage", "description", "source",
+    "primary_company_id", "tag_ids", "custom_fields", "is_archived",
+})
+
+
+def split_updates(updates: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """One PATCH body, sorted into (person fields, profile fields).
+
+    ⚠️ **A KEY IN NEITHER SET IS DROPPED, NOT GUESSED AT.** Routing an unknown
+    field to the profile would silently write it into a document whose schema
+    does not have it, where it would never be read back and never be reported
+    — the quietest kind of data loss. Routing it to the person would write it
+    to a collection this service does not own. The route validates its payload
+    before calling this, so anything unrecognised here is a bug worth losing
+    loudly rather than storing invisibly.
+    """
+    person = {k: v for k, v in (updates or {}).items() if k in PERSON_FIELDS}
+    profile = {k: v for k, v in (updates or {}).items() if k in PROFILE_FIELDS}
+    return person, profile
+
+
+def new_person_fields(values: Dict[str, Any]) -> Dict[str, Any]:
+    """The `contacts` document for somebody created from the CRM.
+
+    ⚠️ **`subscribed` IS FORCED FALSE, AND THIS IS THE MOST IMPORTANT LINE IN
+    THIS MODULE.** `Contact.subscribed` defaults to **True** on the model, so
+    a create that merely omits it opts a sales lead into marketing — a consent
+    decision made by forgetting, in a product whose whole compliance story is
+    that CRM presence is not marketing permission. Adding somebody to a
+    pipeline is not them asking to be emailed.
+
+    ⚠️ AND NO `subscribe_date`. That field is the record of WHEN consent was
+    given; stamping it here would forge one. Consent is granted through the
+    marketing side, which sets both together.
+    """
+    fields = {k: v for k, v in (values or {}).items() if k in PERSON_FIELDS}
+    fields["subscribed"] = False
+    fields["origin"] = "crm"
+    return fields
+
+
+def unified_payload(contact: Any, profile: Any, *, owner: Any = None,
+                    company: Optional[Dict[str, Any]] = None,
+                    linked_deals: Optional[Dict[str, Any]] = None,
+                    linked_companies: Optional[Dict[str, Any]] = None
+                    ) -> Dict[str, Any]:
+    """One contact as the API returns it, assembled from the PERSON and this
+    account's PROFILE of them. Contact unification, phase 4.
+
+    ⚠️ **THE SHAPE IS IDENTICAL TO ``payload()``, AND THAT IS THE REQUIREMENT,
+    NOT A COINCIDENCE.** Both sides of the cutover flag serve the same
+    `ContactDetails` to the same screen. A field that appears on one path and
+    not the other means flipping an account's flag changes its API response —
+    and the client was not redeployed, so the symptom is a blank column that
+    nobody changed. When either builder gains a key, so must the other.
+
+    ⚠️ **``id`` IS THE PLATFORM CONTACT'S ID, NOT THE PROFILE'S.** This is the
+    one id space phase 6 converges on: associations, tasks and notes will all
+    point at the person. Returning the profile's `_id` here would put a second
+    id back into circulation through the front door, which is precisely what
+    this whole change exists to remove. The profile's own id is never exposed.
+
+    ⚠️ **NAME AND EMAIL COME FROM THE PERSON, NOT THE CACHE.** The profile
+    carries `full_name` / `email` / `job_title` so the list can sort and search
+    locally — but they are a cache, and a cache is not what you render when you
+    are holding the authoritative record. Reading them from `contact` here is
+    what keeps a stale cache a missed search hit rather than a wrong name on
+    the screen.
+
+    Args:
+        contact: the platform `contacts` row (a dict or ForeignRecord).
+        profile: this account's `crm_contact_profiles` row, or None for a
+            marketing contact nobody here has worked yet. None yields the
+            person with empty relationship fields — a real, renderable state.
+    """
+    out = {
+        # ── the person ───────────────────────────────────────────────────────
+        "id": _get(contact, "id") or _get(contact, "_id"),
+        "email": _get(contact, "email"),
+        "first_name": _get(contact, "first_name"),
+        "last_name": _get(contact, "last_name"),
+        "full_name": display_name(_get(contact, "first_name"),
+                                  _get(contact, "last_name"),
+                                  _get(contact, "email")),
+        "phone": _get(contact, "phone"),
+        "phone_country_code": _get(contact, "phone_country_code"),
+        "job_title": _get(contact, "job_title"),
+        "linkedin_url": _get(contact, "linkedin_url"),
+
+        # ── this account's relationship with them ────────────────────────────
+        "lifecycle_stage": _get(profile, "lifecycle_stage"),
+        "description": _get(profile, "description"),
+        "source": _get(profile, "source"),
+        "owner": owner,
+        "primary_company": company,
+        "tag_ids": list(_get(profile, "tag_ids") or []),
+        "custom_fields": dict(_get(profile, "custom_fields") or {}),
+        "deal_count": int(_get(profile, "deal_count") or 0),
+        "open_deal_value": float(_get(profile, "open_deal_value") or 0.0),
+        "open_task_count": int(_get(profile, "open_task_count") or 0),
+        "overdue_task_count": int(_get(profile, "overdue_task_count") or 0),
+        "is_archived": bool(_get(profile, "is_archived")),
+        "last_activity_at": _get(profile, "last_activity_at"),
+        # Dates describe the RELATIONSHIP — when this account started working
+        # the person, not when marketing first saw them. A contact subscribed
+        # in 2023 and worked last week reads as a 2023 lead otherwise.
+        "created_at": _get(profile, "created_at"),
+        "updated_at": _get(profile, "updated_at"),
+
+        # ⚠️ READ STRAIGHT OFF THE PERSON, AND NEVER CACHED ON THE PROFILE.
+        # Consent is the one thing that must not be served stale: a rep
+        # deciding whether to mail somebody needs today's answer, not the
+        # reconcile job's. It costs nothing — the contact row is already here.
+        "marketing": {
+            "subscribed": bool(_get(contact, "subscribed")),
+            "subscribe_date": _get(contact, "subscribe_date"),
+            "list_count": len(_get(contact, "list_ids") or []),
+        },
+    }
+    for key, value in (("linked_deals", linked_deals),
+                       ("linked_companies", linked_companies)):
+        if value is not None:
+            out[key] = value
+    return out
+
+
 def payload(contact: Any, *, owner: Any = None,
-            company: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """One contact as the API returns it."""
-    return {
+            company: Optional[Dict[str, Any]] = None,
+            linked_deals: Optional[Dict[str, Any]] = None,
+            linked_companies: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """One contact as the API returns it.
+
+    `linked_deals` / `linked_companies` are only passed by the DETAIL route.
+    The list route leaves them out, and the key is then absent from the dict
+    rather than present as None — see the loop at the end.
+    """
+    out = {
         "id": _get(contact, "id"),
         "email": _get(contact, "email"),
         "first_name": _get(contact, "first_name"),
@@ -265,4 +412,18 @@ def payload(contact: Any, *, owner: Any = None,
         "last_activity_at": _get(contact, "last_activity_at"),
         "created_at": _get(contact, "created_at"),
         "updated_at": _get(contact, "updated_at"),
+        # ⚠️ ALWAYS None HERE, AND THE KEY IS STILL EMITTED. A legacy CRM
+        # contact has no marketing record — that is what the severance meant —
+        # and `None` says exactly that. Omitting the key instead would make
+        # the two builders disagree on shape, which is the one thing they must
+        # never do.
+        "marketing": None,
     }
+    # Omitted entirely when not supplied, so a list row serialises exactly as
+    # it did before this existed and `ContactDetails` falls back to its own
+    # default of None.
+    for key, value in (("linked_deals", linked_deals),
+                       ("linked_companies", linked_companies)):
+        if value is not None:
+            out[key] = value
+    return out

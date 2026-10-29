@@ -46,6 +46,14 @@ class CrmSettingsModel(Document):
 
     # On contact create (or email change), find-or-create a company matching
     # the email domain and link them — unless the domain is a free provider.
+    #: Phase 3 of docs/contact-unification-plan.md. When true, this account's
+    #: contact endpoints serve the platform `contacts` document joined to
+    #: `crm_contact_profiles` instead of `crm_contacts`.
+    #:
+    #: Defaults FALSE: an account that has never heard of this must keep the
+    #: behaviour it has. Overridden wholesale by `settings.unified_contacts`
+    #: when that is not None — see `contact_scope.unified`.
+    unified_contacts: bool = False
     auto_link_contacts_by_domain: bool = True
     # True once a human has turned auto-linking on from the settings screen.
     # It exists so the one-time migration that switches the feature off for

@@ -99,6 +99,32 @@ def verify(token: str) -> Dict[str, Any]:
     return claims
 
 
+#: The platform's API-key prefix. A key looks like `eng_live_<43 urlsafe>`;
+#: `emailMarketingAPI/api/services/api_keys/keys.py` is the source of truth for
+#: the format and the only thing that can validate one.
+#:
+#: ⚠️ THIS IS A SECOND COPY OF A CONSTANT THAT LIVES IN ANOTHER REPO, which is
+#: the bug class this codebase keeps paying for — so note which way it fails.
+#: If the platform ever changes the prefix, a key stops matching here, falls
+#: into the ordinary JWT path, fails `verify` and gets a 401. That is the safe
+#: direction: a stale constant refuses a valid key, it never accepts an invalid
+#: one. Keys are still validated only by the platform; this decides nothing
+#: about whether a credential is good.
+API_KEY_PREFIX = "eng_live_"
+
+
+def is_api_key(token: str | None) -> bool:
+    """Is this an opaque platform API key rather than a session JWT?
+
+    ⚠️ A SHAPE TEST, NOT AN AUTHENTICATION. It answers "which of the two
+    credential kinds is this", so the caller knows whether a local RS256 verify
+    is even possible. An API key carries no signature we hold a key for and no
+    claims to read — the platform is the only thing that can say whether it is
+    real, which is what introspection is for.
+    """
+    return bool(token) and str(token).startswith(API_KEY_PREFIX)
+
+
 def bearer(authorization: str | None) -> str:
     """The token out of an `Authorization: Bearer …` header.
 

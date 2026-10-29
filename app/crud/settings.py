@@ -127,6 +127,45 @@ class CrmAttributeCrud(CrmCrudBase):
                 _logger.exception(ex)
         return written
 
+    async def retype_system(
+        self, *, account_id: Any, rows: List[Dict[str, Any]]
+    ) -> int:
+        """Correct the ``attribute_type`` of system rows seeded with the wrong
+        one. Returns how many rows changed. Feeds on
+        ``defaults.system_attribute_retypes()``.
+
+        ⚠️ `attribute_type` IS IN THE FILTER, NOT JUST THE UPDATE. Matching
+        only on the name would rewrite the type on every read, overwriting
+        whatever the row holds; matching on the wrong type makes this a no-op
+        from the second call onward and leaves any other value alone.
+
+        ⚠️ `is_system` IS IN THE FILTER TOO. A custom attribute an account
+        happened to name `industry` is its own field and is not ours to retype.
+
+        One `update_many` per entry, each guarded: a failure on one must not
+        abandon the rest, and none of them may fail the read that called this.
+        """
+        acct = self.oid(account_id)
+        if not acct or not rows:
+            return 0
+        changed = 0
+        for row in rows:
+            try:
+                res = await CrmAttributeModel.get_motor_collection().update_many(
+                    {
+                        "created_by": acct,
+                        "object_type": row["object_type"],
+                        "internal_name": row["internal_name"],
+                        "attribute_type": row["from_type"],
+                        "is_system": True,
+                    },
+                    {"$set": {"attribute_type": row["to_type"]}},
+                )
+                changed += int(res.modified_count or 0)
+            except Exception as ex:  # pylint: disable=broad-except
+                _logger.exception(ex)
+        return changed
+
     async def labels_for(self, *, account_id: Any, object_type: str) -> dict:
         """``{internal_name: label}`` — feeds the required-attribute messages
         that ``stage_rules.validate_transition`` puts in front of the user.

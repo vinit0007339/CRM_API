@@ -61,6 +61,12 @@ class IntrospectIdentity:
 
     name = "introspect"
 
+    #: An API key can be resolved here, because the host is asked directly and
+    #: `get_request_context` has nothing to verify locally. The platform's
+    #: `/internal/auth/context` accepts either credential and reports which it
+    #: was (`is_api_key`).
+    ACCEPTS_OPAQUE_CREDENTIAL = True
+
     async def resolve(self, token, account_header=None, authorization=None):
         from app.auth import introspect
 
@@ -99,6 +105,18 @@ class JwtClaimsIdentity:
     #: here there is nobody to ask, so honouring it would let any valid token
     #: name any account. The token's own claim is the only source.
     HONOURS_ACCOUNT_HEADER = False
+
+    #: ⚠️ AN API KEY CANNOT BE RESOLVED BY THIS ADAPTER, AND MUST BE REFUSED
+    #: RATHER THAN ATTEMPTED. This adapter's whole method is `tokens.verify`
+    #: followed by reading claims; an opaque key has no signature it can check
+    #: and no claims to read, so `resolve` would raise `TokenError` — which
+    #: `get_request_context` does not catch, because it is not part of the
+    #: adapter interface's vocabulary. The caller would get a 500 on a
+    #: credential that is merely wrong for this deployment.
+    #:
+    #: A consumer running this adapter has no host endpoint to ask, so there is
+    #: nothing to fix here: the right answer is a 401 with a clear log line.
+    ACCEPTS_OPAQUE_CREDENTIAL = False
 
     def __init__(self, claims_map: Optional[Dict[str, str]] = None):
         self.claims_map = claims_map or {}

@@ -12,7 +12,17 @@ from pydantic import BaseModel, Field
 
 from app.object_id import PyObjectId
 
-from .common import CompanyRef, UserRef
+from .common import CompanyRef, LinkedCollection, UserRef
+
+
+class ContactPromoteRequest(BaseModel):
+    """Take up a platform contact as a CRM-owned person."""
+
+    platform_contact_id: PyObjectId
+    owner_id: Optional[PyObjectId] = None
+    #: Defaults to `lead` — see the note in the route. The platform has no
+    #: lifecycle field, so there is nothing to copy and this is a decision.
+    lifecycle_stage: Optional[str] = None
 
 
 class ContactCreateRequest(BaseModel):
@@ -79,6 +89,29 @@ class ContactDuplicate(BaseModel):
     email: Optional[str] = None
 
 
+class ContactMarketing(BaseModel):
+    """The person's standing with marketing, as the CRM may SHOW it.
+
+    ⚠️ READ-ONLY, AND NOTHING IN THE CRM WRITES IT. Subscription is a consent
+    record; it is changed on the marketing side, by the person or by somebody
+    acting on their request. The CRM renders it so a rep can see that the
+    contact they are about to email through a campaign has not opted in —
+    which is the question this panel exists to answer.
+
+    ⚠️ `None` ON THE LEGACY PATH, AND THAT IS NOT THE SAME AS "not
+    subscribed". A legacy CRM contact has no marketing record at all; saying
+    `subscribed: false` would assert a consent state for somebody the audience
+    has never heard of.
+    """
+
+    subscribed: bool = False
+    subscribe_date: Optional[datetime] = None
+    #: Count, not ids: the CRM has no business rendering another module's
+    #: list names, and the number is what tells a rep whether this person is
+    #: being mailed at all.
+    list_count: int = 0
+
+
 class ContactDetails(BaseModel):
     id: Optional[PyObjectId] = None
     email: Optional[str] = None
@@ -104,6 +137,31 @@ class ContactDetails(BaseModel):
     open_deal_value: float = 0.0
     open_task_count: int = 0
     overdue_task_count: int = 0
+
+    #: The deals this person is on, and the companies they belong to.
+    #:
+    #: ⚠️ THE COUNTERPART TO `CompanyDetails.linked_deals`, AND THE REASON THE
+    #: CONTACT PAGE WAS A DEAD END. `deal_count` and `open_deal_value` were
+    #: already here, so the page could say "3 deals" and then offer no way to
+    #: see or reach one — the association existed in `crm_associations`, was
+    #: writable from the deal side (`DealLinksRequest.crm_contact_ids`), and
+    #: was readable from nowhere. A rollup without its collection is a number
+    #: the user cannot act on.
+    #:
+    #: Both are TRUNCATED to the first `LINKED_PREVIEW`, with `total` carrying
+    #: the true count — same contract as the company page, so the "Showing N
+    #: of M" line reads identically on both screens.
+    #:
+    #: `None` rather than an empty collection when the route did not populate
+    #: them: the list endpoint returns `ContactDetails` too, and 50 rows must
+    #: not each carry two association lookups. Absent means "not asked for";
+    #: `{"data": [], "total": 0}` means "asked, and there are none".
+    linked_deals: Optional[LinkedCollection] = None
+    linked_companies: Optional[LinkedCollection] = None
+
+    #: Present and populated only on the unified path — see ContactMarketing.
+    marketing: Optional[ContactMarketing] = None
+
     is_archived: bool = False
     last_activity_at: Optional[datetime] = None
     created_at: Optional[datetime] = None

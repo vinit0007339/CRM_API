@@ -215,6 +215,85 @@ def contact_sort(sort_by: Optional[str], sort_dir: str = "desc"):
     return [("full_name", ASCENDING)]
 
 
+# ── unified contact profiles (contact unification, phase 4) ──────────────────
+
+def profile_filter(
+    *,
+    account_id: Any,
+    q: Optional[str] = None,
+    owner_id: Any = None,
+    company_id: Any = None,
+    lifecycle_stage: Optional[str] = None,
+    tag_ids: Optional[Sequence[Any]] = None,
+    contact_ids: Optional[Sequence[Any]] = None,
+    is_archived: Optional[bool] = False,
+    created_from: Any = None,
+    created_to: Any = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Filter for the unified contacts list, over ``crm_contact_profiles``.
+
+    ⚠️ **DELIBERATELY THE SAME SHAPE AS ``contact_filter``.** The two serve the
+    same screen on either side of the cutover flag, so a filter that narrows
+    one must narrow the other identically — otherwise flipping an account's
+    flag silently changes which contacts it can find, and the bug report is
+    "search is broken since Tuesday" with no code change to point at. Keep the
+    parameter lists in step.
+
+    ⚠️ **``linked`` IS GONE, AND ITS ABSENCE IS THE POINT.** On ``crm_contacts``
+    it asked whether a CRM person had been joined to the marketing audience.
+    Here every row IS a marketing contact, so the question has no meaning —
+    accepting it and ignoring it would be worse than refusing it. The route
+    drops the parameter when unified rather than passing it through.
+
+    ``q`` searches the identity cache plus the denormalised company name,
+    matching ``contact_filter`` field for field.
+    """
+    f = _base(account_id)
+    if is_archived is not None:
+        f["is_archived"] = bool(is_archived)
+    if owner_id is not None:
+        f["owner_id"] = owner_id
+    if company_id is not None:
+        f["primary_company_id"] = company_id
+    if lifecycle_stage:
+        f["lifecycle_stage"] = lifecycle_stage
+    if tag_ids:
+        f["tag_ids"] = {"$in": list(tag_ids)}
+    if contact_ids is not None:
+        f["contact_id"] = {"$in": list(contact_ids)}
+    created = _range(created_from, created_to)
+    if created:
+        f["created_at"] = created
+    if q:
+        f.update(_or_contains(["full_name", "email", "primary_company_name"], q))
+    return merge_fragment(f, extra)
+
+
+#: ⚠️ A SUBSET OF ``CONTACT_SORT_FIELDS``, and every member must be a field
+#: this collection actually holds. `full_name`, `email` and `job_title` are
+#: here because the identity cache carries them; anything else a caller asks
+#: for falls back to the default rather than sorting on a key that is absent
+#: from every document — which Mongo answers by returning the collection in
+#: natural order, i.e. a list that looks shuffled rather than wrong.
+PROFILE_SORT_FIELDS = frozenset({
+    "full_name", "email", "job_title", "lifecycle_stage", "deal_count",
+    "open_deal_value", "created_at", "updated_at", "last_activity_at",
+})
+
+
+def profile_sort(sort_by: Optional[str], sort_dir: str = "desc"):
+    """Sort for the unified contacts list. Name ASCENDING by default.
+
+    Same default and same fallback as ``contact_sort``: the list is read as a
+    directory, so newest-first makes looking somebody up a scroll.
+    """
+    direction = ASCENDING if str(sort_dir).lower() == "asc" else DESCENDING
+    if sort_by in PROFILE_SORT_FIELDS:
+        return [(sort_by, direction)]
+    return [("full_name", ASCENDING)]
+
+
 # ── saved views (E23) ─────────────────────────────────────────────
 def saved_view_filter(*, account_id: Any, object_type: Optional[str] = None,
                       user_id: Any = None) -> Dict[str, Any]:

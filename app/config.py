@@ -133,6 +133,27 @@ class Settings:
     #: which side owns it, so "did I remember?" is one curl.
     task_reminders: bool = False
 
+    #: The contact-unification kill switch. Phase 3 of
+    #: `docs/contact-unification-plan.md`, decision 0.1.
+    #:
+    #: ⚠️ TRI-STATE, AND THE THIRD STATE IS THE POINT. `None` means "let each
+    #: account's `crm_settings.unified_contacts` decide", which is the rollout
+    #: mode. `True` or `False` OVERRIDE every account at once.
+    #:
+    #: `False` is the kill switch: if the unified read path misbehaves in
+    #: production, reverting everybody is a deploy, not a database write per
+    #: account — which matters because the accounts most likely to be broken
+    #: are the ones you least want to be issuing writes to. `True` is the end
+    #: of the rollout, before the flag is retired in phase 9.
+    #:
+    #: ⚠️ AN UNRECOGNISED VALUE FALLS THROUGH TO `None`, NOT TO OFF — the
+    #: opposite of `task_reminders` above, deliberately. There, a typo must
+    #: not start a second scheduler, so anything unclear means off. Here,
+    #: "off" is itself an override that would yank every account back; a typo
+    #: must not do that either. Falling through leaves the per-account setting
+    #: in charge, which is the state the deployment was already in.
+    unified_contacts: Optional[bool] = None
+
     # ── the host boundary (see app/host/) ───────────────────────────────────
     #: Which identity adapter: "introspect" (ask the host per request) or
     #: "jwt_claims" (read the verified token's claims).
@@ -370,6 +391,16 @@ def _load(path: str) -> Settings:
                   or get("CRM", "task_reminders", "") or "")
     settings.task_reminders = str(_reminders).strip().lower() in (
         "1", "true", "yes", "on")
+
+    #: See the field's note: unset or unrecognised leaves per-account control.
+    _unified = (os.environ.get("CRM_UNIFIED_CONTACTS", "").strip()
+                or get("CRM", "unified_contacts", "") or "").strip().lower()
+    if _unified in ("1", "true", "yes", "on"):
+        settings.unified_contacts = True
+    elif _unified in ("0", "false", "no", "off"):
+        settings.unified_contacts = False
+    else:
+        settings.unified_contacts = None
 
     # ⚠️ DEFAULTS TO `full`. A deployment whose app.conf predates profiles
     # must get every endpoint it had before; anything else turns a file nobody

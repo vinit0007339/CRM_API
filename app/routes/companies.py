@@ -36,7 +36,8 @@ from fastapi import APIRouter, Depends, Path, Query
 
 from app.config import logger as _logger, settings
 from app.crud import (
-    CompanyCrud, CrmActivityCrud, CrmAssociationCrud, CrmAttributeCrud, DealCrud,
+    CompanyCrud, CrmActivityCrud, CrmAssociationCrud, CrmAttributeCrud,
+    CrmContactCrud, CrmSettingsCrud, DealCrud,
 )
 from app.models.company import CompanyModel
 from app.object_id import PyObjectId
@@ -53,8 +54,8 @@ from app.schemas.company import (
     CompanyListResponse, CompanyMergeRequest, CompanyUpdateRequest,
 )
 from app.services import (
-    attribute_routing, bulk_rules,
-    activity_recorder as ar, attributes as attr_rules, dedupe,
+    associations as assoc_rules, attribute_routing, bulk_rules, contact_scope,
+    activity_recorder as ar, attributes as attr_rules, dedupe, live_counts,
     merge_rules, permissions as perms, serializers as sz,
 )
 from app.services.filter_service import catalogue_for, fragment_for
@@ -137,6 +138,7 @@ async def list_companies(
     ctx: RequestContext = Depends(require("companies:read")),
     crud: CompanyCrud = Depends(get_crud(CompanyCrud)),
     attributes: CrmAttributeCrud = Depends(get_crud(CrmAttributeCrud)),
+    assoc: CrmAssociationCrud = Depends(get_crud(CrmAssociationCrud)),
 ):
     """List companies. Read is account-wide — ownership never narrows it."""
     account_id = _account_id(ctx)
@@ -160,12 +162,25 @@ async def list_companies(
     total = await crud.count(account_id=account_id, **filters)
 
     owner_index, tag_index = await _lookup_indexes(crud, rows)
-    data = [
-        CompanyDetails.model_validate(
-            sz.company_payload(r, owner_index=owner_index, tag_index=tag_index)
-        )
-        for r in rows
-    ]
+    # ⚠️ THE Contacts COLUMN IS COUNTED, NOT READ OFF THE RECORD.
+    # `company.contact_count` is a rollup kept on link and unlink, and deleting
+    # a contact from the marketing audience touches neither — so a company
+    # whose only person was deleted listed "1" beside a Contacts tab that
+    # (since the detail endpoint started counting what it can resolve) says
+    # none. The column and the tab disagreeing is worse than either number.
+    # Two reads for the whole page; absent from the map means "could not tell",
+    # and the stored counter stands. See `services/live_counts`.
+    live = await live_counts.contact_counts(
+        assoc_crud=assoc, contact_crud_factory=CrmContactCrud,
+        db_session=crud.db_session, account_id=account_id,
+        entity_type="company", entity_ids=[r.id for r in rows])
+    data = []
+    for r in rows:
+        payload = sz.company_payload(r, owner_index=owner_index, tag_index=tag_index)
+        counted = live.get(str(r.id))
+        if counted is not None:
+            payload["contact_count"] = counted
+        data.append(CompanyDetails.model_validate(payload))
     return CompanyListResponse(data=data, total=total, status="success")
 
 
@@ -363,9 +378,12 @@ async def get_company(
     crud: CompanyCrud = Depends(get_crud(CompanyCrud)),
     assoc: CrmAssociationCrud = Depends(get_crud(CrmAssociationCrud)),
     deals: DealCrud = Depends(get_crud(DealCrud)),
+    conf_crud: CrmSettingsCrud = Depends(get_crud(CrmSettingsCrud)),
 ):
     """One request paints the whole detail page — no follow-up call for Overview."""
     account_id = _account_id(ctx)
+    unified = contact_scope.unified(
+        await conf_crud.get_or_create(account_id=account_id))
     company = await crud.get_scoped(account_id, company_id)
     if not company:
         return _fail("That company no longer exists.")
@@ -373,17 +391,28 @@ async def get_company(
     contact_ids = await assoc.counterparts(
         account_id=account_id, entity_type="company", entity_id=company.id,
         want_type="contact")
+    # ⚠️ THE COMPANY'S PEOPLE MOVE COLLECTIONS WITH THE FLAG, AND THE UI READS
+    # ONE KEY. `CompanyDetails.jsx` renders `linked_crm_contacts` and nothing
+    # else, so under the unified path the platform contacts have to arrive
+    # under that name — otherwise the Contacts tab goes empty on an account
+    # whose people are all still there. `linked_contacts` keeps its own value
+    # (the same rows on this path); nothing renders it, and emptying it would
+    # change what the key means rather than what it holds.
     crm_contact_ids = await assoc.counterparts(
         account_id=account_id, entity_type="company", entity_id=company.id,
-        want_type="crm_contact")
+        want_type=assoc_rules.person_entity(unified))
     deal_ids = await assoc.counterparts(
         account_id=account_id, entity_type="company", entity_id=company.id,
         want_type="deal")
 
     contacts = await _fetch_contacts(crud, account_id,
                                      contact_ids[:LINKED_PREVIEW])
-    crm_contacts = await _fetch_crm_contacts(crud, account_id,
-                                             crm_contact_ids[:LINKED_PREVIEW])
+    crm_contacts = (
+        await foreign.contacts_by_ids(crud.db_session,
+                                      crm_contact_ids[:LINKED_PREVIEW])
+        if unified else
+        await _fetch_crm_contacts(crud, account_id,
+                                  crm_contact_ids[:LINKED_PREVIEW]))
     deal_rows = await deals.list_by(
         {"created_by": account_id, "_id": {"$in": deal_ids[:LINKED_PREVIEW]}},
         limit=LINKED_PREVIEW,
@@ -561,24 +590,23 @@ async def delete_company(
     if not allowed:
         return _fail(message)
 
-    if hard and not ctx.is_owner and not ctx.has(perms.MANAGE_OTHERS):
-        return _fail("Only an account owner can permanently delete a company.")
+    # ⚠️ ALWAYS PERMANENT SINCE 29 OCT 2026. Archiving was removed: it had
+    # become a one-way door — an archived company left every list and no
+    # action could then remove it. `hard` is still accepted so existing
+    # callers do not break, and is ignored.
+    #
+    # ⚠️ AND THE OWNER GATE MOVED FROM `hard` TO THE WHOLE OPERATION. It used
+    # to guard only the permanent half; now that there is no recoverable half,
+    # it guards the delete itself. A plain `companies:write` grant can no
+    # longer destroy a record.
+    if not ctx.is_owner and not ctx.has(perms.MANAGE_OTHERS):
+        return _fail("Only an account owner can delete a company. Deleting is "
+                     "permanent — there is no archive to restore from.")
 
-    if hard:
-        await assoc.delete_all_for(account_id=account_id, entity_type="company",
-                                   entity_id=company.id)
-        await company.delete()
-        return _ok(None, "Company deleted.")
-
-    company.is_archived = True
-    company.updated_at = _utcnow()
-    await company.save()
-    await _record(activity, ar.build_activity(
-        account_id=account_id, entity_type="company", entity_id=company.id,
-        activity_type="updated", title="Company archived",
-        actor_user_id=ctx.user.id, actor_name=_actor_name(ctx),
-    ))
-    return _ok(None, "Company archived.")
+    await assoc.delete_all_for(account_id=account_id, entity_type="company",
+                               entity_id=company.id)
+    await company.delete()
+    return _ok(None, "Company deleted permanently.")
 
 
 # ── CRM-030 · links ──────────────────────────────────────────────────────────
@@ -590,9 +618,13 @@ async def add_links(
     crud: CompanyCrud = Depends(get_crud(CompanyCrud)),
     assoc: CrmAssociationCrud = Depends(get_crud(CrmAssociationCrud)),
     activity: CrmActivityCrud = Depends(get_crud(CrmActivityCrud)),
+    conf_crud: CrmSettingsCrud = Depends(get_crud(CrmSettingsCrud)),
 ):
     """Attach contacts and/or deals. Additive and idempotent."""
-    return await _mutate_links(payload, company_id, ctx, crud, assoc, activity, attach=True)
+    return await _mutate_links(
+        payload, company_id, ctx, crud, assoc, activity, attach=True,
+        unified=contact_scope.unified(
+            await conf_crud.get_or_create(account_id=_account_id(ctx))))
 
 
 @router.delete("/{company_id}/links", response_model=ResponseSchema)
@@ -603,12 +635,21 @@ async def remove_links(
     crud: CompanyCrud = Depends(get_crud(CompanyCrud)),
     assoc: CrmAssociationCrud = Depends(get_crud(CrmAssociationCrud)),
     activity: CrmActivityCrud = Depends(get_crud(CrmActivityCrud)),
+    conf_crud: CrmSettingsCrud = Depends(get_crud(CrmSettingsCrud)),
 ):
     """Detach contacts and/or deals. Subtractive — never a replace."""
-    return await _mutate_links(payload, company_id, ctx, crud, assoc, activity, attach=False)
+    return await _mutate_links(
+        payload, company_id, ctx, crud, assoc, activity, attach=False,
+        unified=contact_scope.unified(
+            await conf_crud.get_or_create(account_id=_account_id(ctx))))
 
 
-async def _mutate_links(payload, company_id, ctx, crud, assoc, activity, *, attach: bool):
+# ⚠️ TAKES THE FLAG, NOT THE CRUD. It is a helper shared by two routes, and
+# they own the dependency — threading a crud through so the helper could
+# re-read the setting would be a second read of a flag whose whole design
+# is that it is read once per request.
+async def _mutate_links(payload, company_id, ctx, crud, assoc, activity, *,
+                        attach: bool, unified: bool):
     account_id = _account_id(ctx)
     company = await crud.get_scoped(account_id, company_id)
     if not company:
@@ -625,7 +666,8 @@ async def _mutate_links(payload, company_id, ctx, crud, assoc, activity, *, atta
             changed += 1
     for crm_contact_id in getattr(payload, "crm_contact_ids", None) or []:
         kwargs = dict(account_id=account_id, from_type="company", from_id=company.id,
-                      to_type="crm_contact", to_id=crm_contact_id)
+                      to_type=assoc_rules.person_entity(unified),
+                      to_id=crm_contact_id)
         if attach:
             kwargs["actor_user_id"] = ctx.user.id
         if await op(**kwargs):
@@ -661,14 +703,87 @@ async def company_contacts(
     crud: CompanyCrud = Depends(get_crud(CompanyCrud)),
     assoc: CrmAssociationCrud = Depends(get_crud(CrmAssociationCrud)),
 ):
+    """The people linked to this company — platform contacts and CRM-owned both.
+
+    ⚠️ IT USED TO READ `to_type="contact"` ONLY, AND THE DETAIL PAGE DID NOT USE
+    IT AT ALL. `CompanyDetails.jsx` rendered the embedded `linked_crm_contacts`
+    preview instead, which is a different population depending on the unified
+    flag — and under that flag the SAME rows arrive twice, once under each key,
+    because `person_entity(True)` is `"contact"`. A screen reading the preview
+    therefore had to either show one population and hide the other or dedupe by
+    hand against a 20-row window with totals it could not reconcile.
+
+    So this is now shaped exactly like `GET /crm/deals/{id}/contacts`: both
+    association types, in one response, each row carrying `source`. That makes
+    it the one read that is correct DURING the phase 7 migration as well as on
+    either side of it — a company half-migrated shows all its people, not half.
+
+    The two id sets are disjoint by construction (they come off different
+    `to_type` values), so the union needs no dedupe and `total` is a plain sum.
+
+    ⚠️ `total` COUNTS ASSOCIATIONS; `data` COUNTS PEOPLE WE COULD RESOLVE. A
+    contact deleted on the marketing side leaves its association row behind, so
+    the two can differ and the discrepancy is reported rather than hidden.
+    """
     account_id = _account_id(ctx)
     if not await crud.get_scoped(account_id, company_id):
         return _fail("That company no longer exists.")
-    ids = await assoc.counterparts(account_id=account_id, entity_type="company",
-                                   entity_id=company_id, want_type="contact")
-    page = ids[skip:skip + limit] if limit else []
-    rows = await _fetch_contacts(crud, account_id, page)
-    return _ok({"data": [sz.contact_ref(r) for r in rows], "total": len(ids)})
+
+    platform_ids = await assoc.counterparts(
+        account_id=account_id, entity_type="company", entity_id=company_id,
+        want_type="contact")
+    crm_ids = await assoc.counterparts(
+        account_id=account_id, entity_type="company", entity_id=company_id,
+        want_type="crm_contact")
+
+    # ⚠️ PAGED ACROSS THE TWO SETS AS ONE SEQUENCE, not two pages stitched
+    # together: platform ids come first and keep their order, so a `skip` that
+    # lands in the CRM-owned half does not re-serve the platform half's start.
+    ordered = [("contact", i) for i in platform_ids] + \
+              [("crm_contact", i) for i in crm_ids]
+    page = ordered[skip:skip + limit] if limit else []
+    want_platform = [i for kind, i in page if kind == "contact"]
+    want_crm = [i for kind, i in page if kind == "crm_contact"]
+
+    def _ref(row: Any, source: str) -> Dict[str, Any]:
+        # ⚠️ ids STRINGIFIED HERE. `sz.contact_ref` returns the raw ObjectId,
+        # which is fine for callers feeding a declared schema (`CompanyDetails`
+        # coerces it) — this endpoint answers a plain dict, so an ObjectId
+        # reaches pydantic's serialiser untyped and 500s a read with
+        # `PydanticSerializationError`. Same note as on `deal_contacts`.
+        ref = sz.contact_ref(row)
+        if ref.get("id") is not None:
+            ref["id"] = str(ref["id"])
+        ref["source"] = source
+        return ref
+
+    rows: List[Dict[str, Any]] = []
+    for row in await _fetch_contacts(crud, account_id, want_platform):
+        rows.append(_ref(row, "platform"))
+    for row in await _fetch_crm_contacts(crud, account_id, want_crm):
+        rows.append(_ref(row, "crm"))
+
+    # ⚠️ `total` COUNTS PEOPLE WE RESOLVED, NOT ASSOCIATION ROWS — AND IT USED
+    # TO COUNT THE ROWS. Deleting a contact from the audience leaves its
+    # association behind (nothing on the platform side knows this service's
+    # collections exist), so a record whose only person had been deleted still
+    # reported "Contacts (1)" with an empty list under it.
+    #
+    # ⚠️ ONLY WHEN THIS REQUEST COVERED EVERY ASSOCIATION. On a later page, or
+    # a capped one, the rows in hand are a window and `len(rows)` would be the
+    # size of the window, not of the set — so the association count stands and
+    # the caller's "could not be loaded" note still explains the difference.
+    # `limit=0` asks for no rows at all and is never "everything".
+    #
+    # ⚠️ THE ROWS ARE NOT DELETED HERE. `contacts_by_ids` returns `[]` for a
+    # lookup that FAILED as readily as for one that found nothing (it swallows
+    # the exception by design — see `host/directory.py`), so a dangling row and
+    # an unreachable host are indistinguishable from here. Counting is
+    # reversible; pruning on that signal would not be.
+    resolved_all = skip == 0 and bool(limit) and len(ordered) <= limit
+    total = len(rows) if resolved_all else len(platform_ids) + len(crm_ids)
+    return _ok({"data": rows, "total": total,
+                "counts": {"platform": len(platform_ids), "crm": len(crm_ids)}})
 
 
 @router.get("/{company_id}/deals", response_model=ResponseSchema)

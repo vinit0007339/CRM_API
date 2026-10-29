@@ -109,6 +109,45 @@ def apply_probability_rules(stages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return stages
 
 
+def first_open_stage(stages: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Where a deal lands when nobody chose a stage.
+
+    ⚠️ SORTED BY ``order``, NOT ``stages[0]``. Every path that creates a deal
+    has to agree on what "the first open stage" means, and they did not:
+    ``routes/deals.py`` took the first OPEN entry in the stored array while
+    ``routes/internal.py`` sorted by ``order`` first. ``normalise_stages``
+    keeps the two in step for any pipeline mutated through these rules, so the
+    divergence is invisible — until a pipeline arrives from an import, a seed
+    script or a hand-edited document, and then one door puts the deal in New
+    lead and the other in whatever happens to sit at index 0.
+
+    ⚠️ AND ``_type_of``, NOT ``s.get("type") == "open"``. A stage whose
+    ``type`` is absent or None is an OPEN stage — that is the model default —
+    but the equality check skips it, so a pipeline carrying one such stage
+    would report "no open stage" and refuse to create the deal at all.
+
+    Returns None only when the pipeline genuinely has no open stage, which the
+    caller must report rather than fall back on: a deal placed in Won or Lost
+    at birth is closed before anyone sold anything.
+    """
+    def _field(stage: Any, key: str, default: Any = None) -> Any:
+        # Accepts a dict OR an embedded `PipelineStage`: the deals route works
+        # with `model_dump()`ed stages, the lead door and the import worker
+        # with the model objects straight off the pipeline. One rule has to
+        # serve all three or they drift apart again.
+        if isinstance(stage, dict):
+            value = stage.get(key, default)
+        else:
+            value = getattr(stage, key, default)
+        return getattr(value, "value", value)
+
+    ordered = sorted(stages, key=lambda st: _field(st, "order", 0) or 0)
+    return next(
+        (st for st in ordered if (_field(st, "type", OPEN) or OPEN) == OPEN),
+        None,
+    )
+
+
 def normalise_stages(stages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Pin Won/Lost last, renumber ``order`` contiguously, fix probabilities.
 

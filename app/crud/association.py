@@ -111,6 +111,43 @@ class CrmAssociationCrud(CrmCrudBase):
                 out.append(cid)
         return out
 
+    async def person_links(self, *, account_id: Any, entity_type: str,
+                           entity_ids: List[Any]) -> List[Tuple[Any, str, Any]]:
+        """``(entity_id, person_type, person_id)`` for every person linked to
+        any of ``entity_ids``. One query for a whole page of records.
+
+        ⚠️ THE RECORD IS ALWAYS THE `from` SIDE, AND THAT IS NOT AN ASSUMPTION
+        — it is `_PRECEDENCE`. `company` is 0 and `deal` is 1; `contact` is 2
+        and `crm_contact` is 3, so `normalize_pair` always stores the company
+        or deal first. The assert below makes that dependency fail loudly if
+        the ordering is ever changed, rather than returning an empty page of
+        counts that reads as "nobody is linked to anything".
+        (`scripts/check_invariants.py` pins the same ordering.)
+
+        ⚠️ BOTH PERSON TYPES, because a half-migrated account holds people in
+        each and the detail pages show both. See `person_entity`.
+        """
+        from app.services.associations import _PRECEDENCE
+        assert _PRECEDENCE[entity_type] < _PRECEDENCE["contact"], (
+            f"{entity_type} no longer sorts before a person; person_links "
+            "reads the wrong side of the pair")
+
+        acct = self.oid(account_id)
+        ids = [i for i in (self.oid(e) for e in entity_ids or []) if i is not None]
+        if not acct or not ids or self.collection is None:
+            return []
+        try:
+            rows = await self.collection.find({
+                "created_by": acct,
+                "from_type": entity_type,
+                "from_id": {"$in": ids},
+                "to_type": {"$in": ["contact", "crm_contact"]},
+            }).to_list(length=None)
+        except Exception as ex:  # pylint: disable=broad-except
+            _logger.exception(ex)
+            return []
+        return [(r.get("from_id"), r.get("to_type"), r.get("to_id")) for r in rows]
+
     async def delete_all_for(self, *, account_id: Any, entity_type: str,
                              entity_id: Any) -> int:
         """Drop every association for a record being deleted, decrementing

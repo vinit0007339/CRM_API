@@ -686,6 +686,13 @@ cancel the table rows below and the checker would report eight endpoints as
 undocumented while the document appeared to list them. If `/crm/contacts` is
 ever removed a third time, that is the mechanism to use.
 
+⚠️ **~~`POST /crm/contacts/promote`~~ IS GONE AS OF PHASE 5** (decision 0.3). It
+took up a platform contact as a CRM-owned person — an operation that only
+means something while there are two populations. On the unified path every
+marketing contact is already reachable, and the profile is created by editing
+one. Its UI call sites went in the same release, including the one on the DEAL
+page (`DealDetails.jsx`), which is the one nobody expected.
+
 Two endpoints from the ORIGINAL object are still gone, and deliberately:
 ~~`POST /crm/contacts/{id}/link`~~ and ~~`DELETE /crm/contacts/{id}/link`~~.
 They attached a CRM contact to a platform Contact, and that seam is what
@@ -698,6 +705,27 @@ is who sales is working. A CRM contact is **not marketable** — it cannot be
 added to a list or emailed from the CRM. To market to one, it is imported into
 the audience as a contact in its own right, where it gets its own consent
 record.
+
+⚠️ **AND THAT IS BEING REVERSED, BEHIND A FLAG.** The paragraph above
+describes the LEGACY path and stays true while
+`crm_settings.unified_contacts` is false. With the flag on, `/crm/contacts`
+serves the platform contact joined to a per-account `crm_contact_profiles`
+row: one person, one id space, marketing and CRM alike. See
+`docs/contact-unification-plan.md`. The response model does not change —
+`ContactDetails` carries the same keys on both paths, deliberately, so a
+client cannot tell which it is talking to.
+
+Two differences a caller can see on the unified path:
+
+- `GET /crm/contacts/{id}` takes a **platform contact id**, and a contact with
+  no CRM profile is returned with empty relationship fields rather than 404 —
+  that is a marketing contact nobody has worked yet.
+- `GET /crm/contacts` accepts **`scope=worked|all`** (default `worked`).
+  `all` lists the whole marketing audience and refuses `owner_id`,
+  `company_id`, `lifecycle_stage`, `tag_ids` and `filters` with a 'failure'
+  envelope — those describe a CRM relationship and only exist for worked
+  contacts. The parameter is ignored on the legacy path, which has one
+  population.
 
 **CRM-406 is therefore answered, and by the row rather than by a rule.**
 `AssociationEntity` has two contact members:
@@ -714,10 +742,38 @@ parked on — *"a contact row could hold either a platform id or a CRM one
 depending on which screen wrote it"* — is removed by making the two cases
 different rows rather than by moving data.
 
-`GET /crm/companies/{id}/contacts` keeps its path and its meaning: platform
-contacts. The company detail payload gains `linked_crm_contacts` beside
-`linked_contacts`, and the company page shows both, labelled — they are two
-populations, and one of them cannot be emailed.
+~~`GET /crm/companies/{id}/contacts` keeps its path and its meaning: platform
+contacts.~~ **Superseded.** It keeps its path and now returns BOTH association
+types in one response, each row carrying `source` (`platform` | `crm`), with
+`counts` beside `total` — the same shape as `GET /crm/deals/{id}/contacts`, and
+correct during the phase 7 migration as well as on either side of it.
+
+On BOTH of those endpoints `total` now counts the people that RESOLVED, not the
+association rows, whenever the request covered every association (`skip=0` and a
+`limit` at least as large as the set). Deleting a contact from the audience
+leaves its association behind — nothing on the platform side knows this
+service's collections exist — so a record whose only person had been deleted
+reported "Contacts (1)" over an empty list. On a later or capped page the
+association count still stands, because the rows in hand are a window and their
+count is the size of the window. The dangling rows are NOT pruned: a lookup that
+failed and one that found nothing both come back empty (`host/directory.py`
+swallows the error by design), so the two are indistinguishable from the read
+side, and counting is reversible where deleting is not.
+
+The same correction reaches the LIST views. `GET /crm/companies` and
+`GET /crm/deals` no longer emit the stored `contact_count` rollup verbatim:
+`services/live_counts` resolves the page's associated people in two reads and
+overwrites the column where it can establish an answer, leaving the rollup in
+place where it cannot. `contact_count` remains a stored field and is still
+maintained on link and unlink — nothing about writes changed — but it is no
+longer what the list shows, because a contact deleted from the audience
+decrements neither it nor the association behind it. The
+company detail payload still carries `linked_crm_contacts` beside
+`linked_contacts`, but the company page no longer reads either for its Contacts
+tab: under the unified flag those two keys hold the SAME rows (because
+`person_entity(True)` is `"contact"`), so a screen reading the preview had to
+dedupe a 20-row window against totals it could not reconcile. It loads this
+endpoint instead.
 
 `[CRM] contacts_source` survives only to tell the NOTE IMPORTER which
 population a `contact_email` column means; it does not affect any endpoint
@@ -1240,7 +1296,7 @@ and the response model it declares. Regenerate with
 `python3 scripts/check_crm_contract.py --emit`; verify with the same
 script and no flag, which fails on drift in either direction.
 
-**91 endpoints across 13 routers.**
+**97 endpoints across 14 routers.**
 
 #### Attributes
 
@@ -1287,6 +1343,7 @@ script and no flag, which fails on drift in either direction.
 | `GET` | `/crm/contacts` | `contacts:read` | `ContactListResponse` |
 | `POST` | `/crm/contacts` | `contacts:write` | `ResponseSchema[ContactDetails]` |
 | `POST` | `/crm/contacts/bulk` | `contacts:write` | `ResponseSchema[BulkActionResult]` |
+| `GET` | `/crm/contacts/by-platform/{platform_contact_id}` | `contacts:read` | `ResponseSchema` |
 | `GET` | `/crm/contacts/filter-fields` | `contacts:read` | `ResponseSchema` |
 | `DELETE` | `/crm/contacts/{contact_id}` | `contacts:write` | `ResponseSchema` |
 | `GET` | `/crm/contacts/{contact_id}` | `contacts:read` | `ResponseSchema[ContactDetails]` |
@@ -1307,6 +1364,7 @@ script and no flag, which fails on drift in either direction.
 | `GET` | `/crm/deals/{deal_id}/activities` | `deals:read` | `ResponseSchema` |
 | `POST` | `/crm/deals/{deal_id}/close` | `deals:write` | `ResponseSchema[DealDetails]` |
 | `GET` | `/crm/deals/{deal_id}/companies` | `deals:read` | `ResponseSchema` |
+| `GET` | `/crm/deals/{deal_id}/contacts` | `deals:read` | `ResponseSchema` |
 | `DELETE` | `/crm/deals/{deal_id}/links` | `deals:write` | `ResponseSchema` |
 | `POST` | `/crm/deals/{deal_id}/links` | `deals:write` | `ResponseSchema` |
 | `POST` | `/crm/deals/{deal_id}/reopen` | `deals:write` | `ResponseSchema[DealDetails]` |
@@ -1397,6 +1455,15 @@ script and no flag, which fails on drift in either direction.
 | `GET` | `/crm/tasks/{task_id}` | `crm_tasks:read` | `ResponseSchema[TaskDetails]` |
 | `PATCH` | `/crm/tasks/{task_id}` | `crm_tasks:write` | `ResponseSchema[TaskDetails]` |
 | `POST` | `/crm/tasks/{task_id}/complete` | `crm_tasks:write` | `ResponseSchema[TaskDetails]` |
+
+#### reports
+
+| Method | Path | Permission | Response model |
+|---|---|---|---|
+| `GET` | `/crm/reports/conversion` | `deals:read` | `ResponseSchema` |
+| `GET` | `/crm/reports/lost-reasons` | `deals:read` | `ResponseSchema` |
+| `GET` | `/crm/reports/pipeline` | `deals:read` | `ResponseSchema` |
+| `GET` | `/crm/reports/time-in-stage` | `deals:read` | `ResponseSchema` |
 
 <!-- /GENERATED -->
 

@@ -30,7 +30,7 @@ structure behind ``pipelines:write``.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import APIRouter, Depends, Path, Query
 
@@ -166,6 +166,8 @@ async def _provision_system(crud: CrmAttributeCrud, account_id: PyObjectId) -> i
     try again on the next request.
     """
     try:
+        await _repair_types(crud, account_id)
+
         expected = defaults.system_attribute_count()
         have = await crud.count_system(account_id=account_id)
         # -1 is "the count failed", which is not the same as "nothing is
@@ -196,6 +198,43 @@ async def _provision_system(crud: CrmAttributeCrud, account_id: PyObjectId) -> i
         # was swallowed without a log line).
         _logger.exception(ex)
         return 0
+
+
+#: Accounts whose system attribute types this process has already repaired.
+#:
+#: ⚠️ A CACHE, AND DELIBERATELY A LEAKY ONE. The repair itself is idempotent
+#: (see `retype_system`), so this exists only to keep a settled account from
+#: paying one `update_many` per attributes read forever. A restart or a second
+#: worker simply repeats the repair once and finds nothing — the wrong answer
+#: here costs a no-op query, never a wrong type. It is bounded by the number of
+#: accounts one process serves, and holds ObjectIds, not records.
+_TYPES_REPAIRED: Set[str] = set()
+
+
+async def _repair_types(crud: CrmAttributeCrud, account_id: PyObjectId) -> int:
+    """Fix system attributes seeded with a type the catalogue has since changed.
+
+    ⚠️ THIS SITS OUTSIDE THE COUNT GUARD BELOW, which returns early the moment
+    an account has every row it should. Type drift is invisible to a count —
+    the row is present, it is simply the wrong type — so folding this in after
+    that guard would mean it never ran on exactly the accounts that need it.
+    """
+    key = str(account_id)
+    if key in _TYPES_REPAIRED:
+        return 0
+    # Marked before the call, not after: a failure is logged inside
+    # `retype_system` and retried on the next process, and marking after would
+    # retry a permanently failing repair on every single read.
+    _TYPES_REPAIRED.add(key)
+    changed = await crud.retype_system(
+        account_id=account_id, rows=defaults.system_attribute_retypes()
+    )
+    if changed:
+        _logger.info(
+            f"CRM: corrected the type of {changed} system attribute(s) for "
+            f"account {account_id}"
+        )
+    return changed
 
 
 # ── write ────────────────────────────────────────────────────────────────────

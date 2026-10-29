@@ -9,6 +9,7 @@ from .association import CrmAssociationCrud
 from .base import CrmCrudBase
 from .company import CompanyCrud
 from .contact import CrmContactCrud
+from .contact_profile import CrmContactProfileCrud
 from .deal import DealCrud
 from .file import CrmFileCrud
 from .export_run import CrmExportCrud
@@ -24,6 +25,6 @@ __all__ = [
     "CrmCrudBase", "CompanyCrud", "PipelineCrud", "DealCrud",
     "CrmAssociationCrud", "CrmActivityCrud", "CrmSettingsCrud", "CrmAttributeCrud",
     "CrmNoteCrud", "CrmFileCrud", "CrmTaskCrud", "CrmImportCrud", "CrmExportCrud",
-    "CrmViewPreferenceCrud", "CrmSavedViewCrud",
+    "CrmViewPreferenceCrud", "CrmSavedViewCrud", "CrmContactProfileCrud",
     "CrmContactCrud",
 ]

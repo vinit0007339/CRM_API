@@ -86,13 +86,42 @@ SYSTEM_COMPANY_ATTRIBUTES = [
     ("domain",         "Domain",         "url",           False),
     ("website",        "Website",        "url",           False),
     ("linkedin_url",   "LinkedIn",       "url",           False),
-    ("industry",       "Industry",       "single_select", False),
+    # ⚠️ TEXT, NOT `single_select`. It was a picklist fed by
+    # `crm_settings.industries`, which meant the create form showed a dropdown
+    # — and on an account whose `industries` list is empty (the default:
+    # `crud/settings.py` seeds it empty) an EMPTY dropdown with nothing to
+    # pick. `CompanyModel.industry` is a plain `Optional[str]` and no endpoint
+    # validates it against the list, so free text was always accepted; only
+    # the form pretended otherwise. `SYSTEM_ATTRIBUTE_RETYPES` repairs the
+    # accounts already seeded with the old type.
+    ("industry",       "Industry",       "text",          False),
     ("employee_count", "Employees",      "number",        False),
     ("annual_revenue", "Annual revenue", "currency",      False),
     ("phone",          "Phone",          "phone",         False),
     ("owner_id",       "Owner",          "user",          False),
     ("description",    "Description",    "textarea",      False),
 ]
+
+# Corrections to the type of an `is_system` attribute that was already seeded
+# wrong, as `(object_type, internal_name, seeded_type, correct_type)`.
+#
+# ⚠️ WHY THIS EXISTS AT ALL. `missing_system_attributes` only ever INSERTS
+# rows that are absent; it never touches one that is already there. So editing
+# the catalogue above fixes new accounts and leaves every existing account on
+# the old type forever — which is how an account would keep rendering a
+# dropdown for Industry after the seed said text. "Remember to run a script"
+# is not the mechanism here (see `_provision_system`'s own note on that).
+#
+# ⚠️ `seeded_type` IS PART OF THE KEY, NOT DECORATION. The repair only matches
+# a row still carrying the wrong type, so it is a no-op the second time and —
+# more importantly — it cannot stomp a type an account legitimately holds.
+#
+# Only safe where the stored value needs no conversion: both ends here are
+# strings, so a company whose industry is "SaaS & Software" keeps it verbatim
+# and simply gains the ability to type something else.
+SYSTEM_ATTRIBUTE_RETYPES: Tuple[Tuple[str, str, str, str], ...] = (
+    ("company", "industry", "single_select", "text"),
+)
 
 SYSTEM_DEAL_ATTRIBUTES = [
     ("name",                "Deal name",           "text",     True),
@@ -186,6 +215,23 @@ def build_system_attributes(object_type: str) -> List[Dict[str, Any]]:
             "form_order": i,
         }
         for i, (internal, label, attr_type, required) in enumerate(source)
+    ]
+
+
+def system_attribute_retypes() -> List[Dict[str, Any]]:
+    """``SYSTEM_ATTRIBUTE_RETYPES`` as filter/update pairs for the crud layer.
+
+    Keeps the tuple shape in one place: the caller does not need to remember
+    which element is the type to look for and which is the type to write.
+    """
+    return [
+        {
+            "object_type": object_type,
+            "internal_name": internal_name,
+            "from_type": seeded,
+            "to_type": correct,
+        }
+        for object_type, internal_name, seeded, correct in SYSTEM_ATTRIBUTE_RETYPES
     ]
 
 

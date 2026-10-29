@@ -82,6 +82,19 @@ class CrmContactModel(Document):
     custom_fields: Dict[str, Any] = Field(default_factory=dict)
     description: Optional[str] = None
     source: Optional[str] = None                # manual | import | auto_link
+    #: The PLATFORM contact this person was promoted from, when they were.
+    #:
+    #: ⚠️ A REFERENCE, NOT A SHARED ID. The promoted row gets its own `_id`
+    #: rather than reusing the platform contact's. Reusing it was the abandoned
+    #: backfill's design, and it has a failure mode this does not: with one id
+    #: in two collections, code that reads an association's `to_id` without
+    #: checking `to_type` resolves the WRONG record silently, where a distinct
+    #: id resolves nothing and the bug is visible.
+    #:
+    #: ⚠️ ALSO WHAT MAKES PROMOTION IDEMPOTENT. Promoting twice finds this row
+    #: and returns it instead of hitting `uniq_crm_contact_email` with a
+    #: duplicate.
+    platform_contact_id: Optional[PyObjectId] = None
 
     # ── rollups and lifecycle ───────────────────────────────────────────────
     deal_count: int = 0

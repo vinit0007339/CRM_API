@@ -111,11 +111,8 @@ class BulkRunner:
         if reasons:
             result["skipped_reason"] = "; ".join(reasons)
         await self._record(activities)
-        # `permanent` is a property of the OBJECT, not of the request: a deal
-        # has no archived state, so `delete` on one is always for good.
-        result["message"] = br.summarise(
-            result, action,
-            permanent=hard or not self._can_archive_entity())
+        # Always permanent since archiving was removed — see `_delete`.
+        result["message"] = br.summarise(result, action, permanent=True)
         return result
 
     # ── selection ────────────────────────────────────────────────────────────
@@ -200,50 +197,27 @@ class BulkRunner:
             metadata={"action": action, "fields": sorted(changes)},
             actor_user_id=self.actor_user_id, actor_name=self.actor_name)
 
-    def _can_archive_entity(self) -> bool:
-        """The same question as `_can_archive`, asked of the CRUD's model so it
-        can be answered before any record has been read."""
-        model = getattr(self.crud, "model", None)
-        fields = getattr(model, "model_fields", None) or {}
-        return "is_archived" in fields
-
-    @staticmethod
-    def _can_archive(record: Any) -> bool:
-        """Does this object's model actually have somewhere to archive to?
-
-        ⚠️ ASKED OF THE MODEL, NOT OF A HAND-MAINTAINED LIST. The previous
-        version assumed every CRM object had `is_archived`; `DealModel` does
-        not, so `record.is_archived = True` raised ValueError, every record was
-        counted as `failed`, and bulk delete on deals reported "0 updated, 2
-        failed" having done nothing. Reading `model_fields` cannot drift from
-        the schema the way a list can.
-        """
-        fields = getattr(type(record), "model_fields", None) or {}
-        return "is_archived" in fields
-
     async def _delete(self, record: Any, *, hard: bool) -> bool:
-        """Archive where the object HAS an archive; delete for real where it
-        does not.
+        """Delete, permanently, always.
 
-        Mirrors the single-record endpoint in both cases: a company's
-        ``DELETE`` archives unless ``?hard=true``, and a deal's ``DELETE``
-        is permanent because a deal has no archived state — see
-        ``bulk_rules.DEAL_ACTIONS``. A bulk action that behaved differently
-        from the button next to it would be a trap.
+        ⚠️ ARCHIVING WAS REMOVED ON 29 OCT 2026 and this is where it lived.
+        Companies and contacts used to archive unless `hard` was asked for;
+        deals never could. The middle ground had become a one-way door — an
+        archived record left every list and no action could then remove it —
+        so a delete is now a delete for every object.
 
-        ⚠️ `hard=false` ON AN OBJECT WITH NO ARCHIVE STILL DELETES. That is the
-        only coherent reading: the caller asked for `delete`, the object cannot
-        be archived, and the alternative — doing nothing and reporting success
-        — is the failure this method used to produce. The response says
-        `permanently` so the user is not left guessing; see
-        `bulk_rules.summarise`.
+        ⚠️ `hard` IS VESTIGIAL AND IGNORED. Kept in the signature so existing
+        callers and the `?hard=` query param do not break; it no longer
+        selects between two behaviours because there is only one. Mirrors the
+        single-record endpoints, which are restricted to an account owner or
+        `crm:manage_others` for the same reason: nothing is recoverable now.
         """
-        if hard or not self._can_archive(record):
-            return await self.crud.delete_scoped(self.account_id, record.id)
-        record.is_archived = True
-        record.updated_at = _now()
-        await record.save()
-        return True
+        # ⚠️ ALWAYS PERMANENT, AND `hard` IS NOW VESTIGIAL. Archiving was
+        # removed on 29 Oct 2026; there is no longer a recoverable state for a
+        # delete to fall back to, so every object behaves the way deals always
+        # have. The parameter is kept so existing callers do not break, and
+        # ignored.
+        return await self.crud.delete_scoped(self.account_id, record.id)
 
     async def _record(self, activities: List[Optional[Dict[str, Any]]]) -> None:
         if not self.activity or not activities:

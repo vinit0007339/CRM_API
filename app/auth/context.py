@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import Depends, Header, Request
 
 from app.auth import introspect, rbac, tokens
-from app.config import settings
+from app.config import logger, settings
 from app.host.identity import get_identity
 from app.errors import (
     AuthError, AuthNotConfiguredError, PermissionDeniedError,
@@ -124,9 +124,45 @@ async def get_request_context(
             f"missing {' and '.join(absent)}. "
             "GET /health/ready lists it with the resolved path.")
 
+    # ⚠️ TWO CREDENTIAL KINDS, AND ONLY ONE OF THEM CAN BE VERIFIED HERE.
+    #
+    # A session JWT is verified locally and THEN introspected — both steps,
+    # unconditionally, because the CRM does not want to depend on the platform
+    # alone to decide a signature is good. That property is unchanged below.
+    #
+    # A platform API key (`eng_live_…`) is opaque: there is no signature we
+    # hold a key for and no claims to read, so a local verify is not a check
+    # that was skipped — it is a check that cannot exist. The platform is the
+    # only thing that can say whether a key is real, which is exactly what
+    # introspection asks it, and `/internal/auth/context` has always answered
+    # for keys (it returns `is_api_key`, which this function reads below).
+    #
+    # Before this, a key reached `tokens.verify`, failed as "not a JWT", and
+    # got a 401 — so a customer's backend could not call the CRM at all, even
+    # with `deals:write` scoped onto the key. The rest of the path was already
+    # built for it: `introspect` forwards the raw header, the platform resolves
+    # it, and a key's scopes arrive as `extra_grants`, which `rbac` unions into
+    # the role's permissions.
+    identity = get_identity()
     try:
         token = tokens.bearer(authorization)
-        tokens.verify(token)
+        if tokens.is_api_key(token):
+            # ⚠️ REFUSE, DO NOT ATTEMPT, when the configured adapter cannot
+            # resolve an opaque credential. `jwt_claims` resolves by calling
+            # `tokens.verify` itself and reading claims, so handing it a key
+            # raises `TokenError` from inside `resolve` — which the
+            # introspection-shaped `except` clauses below do not catch, and the
+            # caller gets a 500 for a credential that is simply wrong for this
+            # deployment.
+            if not getattr(identity, "ACCEPTS_OPAQUE_CREDENTIAL", False):
+                logger.warning(
+                    "CRM auth: API key refused — the %r identity adapter has "
+                    "no host to ask, so an opaque credential cannot be "
+                    "resolved. Only session tokens work on this deployment.",
+                    getattr(identity, "name", "unknown"))
+                raise tokens.TokenError("api key not supported by this adapter")
+        else:
+            tokens.verify(token)
     except tokens.TokenError as ex:
         # ⚠️ ONE MESSAGE FOR EVERY TOKEN FAILURE, matching the monolith's
         # "Invalid Credentials". Which check failed is in the log, not in the
@@ -143,7 +179,7 @@ async def get_request_context(
         # TYPES still come from `introspect` because they are the interface's
         # vocabulary — "denied" and "could not find out" — and the difference
         # between them is the 401/503 split below.
-        resolved = await get_identity().resolve(
+        resolved = await identity.resolve(
             token, account_header, authorization=authorization)
     except introspect.IntrospectionDenied as ex:
         raise AuthError(ex.message, ex.status_code) from ex

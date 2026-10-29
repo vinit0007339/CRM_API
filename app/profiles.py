@@ -42,8 +42,8 @@ from typing import Dict, FrozenSet
 #: cannot be half-wired.
 ALL_MODULES: FrozenSet[str] = frozenset({
     "attributes", "companies", "contacts", "deals", "exports", "files",
-    "imports", "notes", "pipelines", "saved_views", "settings", "tasks",
-    "view_preferences",
+    "imports", "notes", "pipelines", "reports", "saved_views", "settings",
+    "tasks", "view_preferences",
 })
 
 #: ⚠️ `attributes` AND `settings` ARE IN EVERY PROFILE, AND NOT BECAUSE THEY
@@ -73,6 +73,12 @@ PROFILES: Dict[str, FrozenSet[str]] = {
     # deals with no people on them is a pipeline tracker. Drop it from here if
     # a consumer genuinely wants records without people — nothing else in
     # `core` depends on it.
+    # ⚠️ `reports` IS NOT IN `core`, WHERE `contacts` IS, AND THE REASON IS
+    # NOT SIZE. A consumer adopting the CRM needs to record companies, people
+    # and deals on day one; it does not need conversion analytics before it has
+    # any history to analyse. Reports read `crm_activities`, so on a fresh
+    # install every one of them answers honestly and uselessly — zero samples,
+    # null rates. `full` has it; a consumer can ask.
     "core": frozenset({
         "companies", "contacts", "deals", "pipelines", "notes", "tasks",
         "settings", "attributes",

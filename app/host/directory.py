@@ -51,7 +51,7 @@ ADAPTERS
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from app.config import DEFAULT_HOST_DIRECTORY, logger, settings
 
@@ -107,6 +107,23 @@ class Directory(Protocol):
 
     async def contacts_by_ids(self, db: Any,
                               contact_ids: List[Any]) -> List[Dict[str, Any]]: ...
+
+    #: ⚠️ THE SIXTH READ, AND THE FIRST ONE ADDED SINCE THIS INTERFACE WAS
+    #: DRAWN. `app/foreign.py` says the five call sites are the thing that must
+    #: not grow, so this was taken as a decision rather than reached for:
+    #: `docs/contact-unification-phases.md` phase 4b. It is here because the
+    #: unified "All contacts" view lists the marketing audience itself, and the
+    #: other five reads can only resolve ids a caller already holds — there is
+    #: no way to page or search a collection this service does not own.
+    #:
+    #: ⚠️ IT IS A LOOKUP, NOT AN EXPANSION, so it returns what the host has and
+    #: lets the caller report emptiness. It must be ACCOUNT-SCOPED in every
+    #: implementation: `contacts` rows are shared between accounts by design.
+    async def contacts_page(self, db: Any, account_id: Any, *,
+                            q: Optional[str] = None, skip: int = 0,
+                            limit: int = 50,
+                            sort: Optional[List[tuple]] = None
+                            ) -> Tuple[List[Dict[str, Any]], int]: ...
 
     async def users_by_ids(self, db: Any,
                            user_ids: List[Any]) -> List[Dict[str, Any]]: ...
@@ -191,6 +208,48 @@ class SharedDbDirectory:
         except Exception as ex:                   # pylint: disable=broad-except
             logger.exception(ex)
             return []
+
+    async def contacts_page(self, db, account_id, *, q=None, skip=0,
+                            limit=50, sort=None):
+        """A page of this account's marketing audience, plus the true total.
+
+        ⚠️ SCOPED, ALWAYS. `cs.scoped` is `created_by` OR `owner_ids` — the
+        predicate `contact_scope` exists to stop being retyped. Without it this
+        pages every tenant's contacts into one account's screen, which is the
+        worst bug this file could have.
+
+        ⚠️ `q` IS A CASE-INSENSITIVE PREFIX-ANCHORED SCAN, and it is the
+        expensive half of this view. `contacts` carries no text index that this
+        service may add — it does not own the collection — so a search here is
+        a regex over the scoped set. The caller is expected to page it.
+        """
+        import re
+
+        from app.services import contact_scope as cs
+
+        collection = self._collection(db, "contacts")
+        if collection is None:
+            return [], 0
+
+        query = cs.scoped({}, account_id)
+        needle = str(q or "").strip()
+        if needle:
+            pattern = {"$regex": re.escape(needle), "$options": "i"}
+            query = {"$and": [query, {"$or": [
+                {"email": pattern}, {"first_name": pattern},
+                {"last_name": pattern},
+            ]}]}
+        try:
+            total = await collection.count_documents(query)
+            cursor = collection.find(query)
+            if sort:
+                cursor = cursor.sort(list(sort))
+            rows = await cursor.skip(max(0, int(skip))).limit(
+                max(0, int(limit))).to_list(length=None)
+            return rows, int(total)
+        except Exception as ex:                   # pylint: disable=broad-except
+            logger.exception(ex)
+            return [], 0
 
     async def users_by_ids(self, db, user_ids):
         """One query for a whole page of rows, never one per row (NFR6)."""
@@ -342,6 +401,34 @@ class HttpDirectory:
     async def contacts_by_ids(self, db, contact_ids):
         return await self._by_ids("contacts", contact_ids)
 
+    async def contacts_page(self, db, account_id, *, q=None, skip=0,
+                            limit=50, sort=None):
+        """⚠️ NEEDS A HOST ENDPOINT THAT DOES NOT EXIST YET.
+
+        The client half is written so the adapter satisfies the Protocol and
+        a host that implements `kind: "contacts_page"` works immediately. The
+        platform side is a separate task — see
+        `docs/contact-unification-phases.md` phase 4b.
+
+        Until then this degrades to empty rather than raising, which is this
+        adapter's rule for a read the host cannot answer: an account on the
+        HTTP directory sees the default view (which needs no host paging) and
+        an empty All view, not a 500.
+        """
+        try:
+            body = await self._post({
+                "kind": "contacts_page",
+                "account_id": str(account_id or ""),
+                "q": str(q or ""), "skip": int(skip), "limit": int(limit),
+            })
+        except Exception as ex:                   # pylint: disable=broad-except
+            logger.warning("contacts_page degraded to empty: %s", ex)
+            return [], 0
+        rows = self._rows(body)
+        data = (body or {}).get("data") or {}
+        total = data.get("total") if isinstance(data, dict) else None
+        return rows, int(total) if isinstance(total, int) else len(rows)
+
     async def users_by_ids(self, db, user_ids):
         return await self._by_ids("users", user_ids)
 
@@ -376,6 +463,11 @@ class NoDirectory:
 
     async def contacts_by_ids(self, db, contact_ids):
         return []
+
+    async def contacts_page(self, db, account_id, *, q=None, skip=0,
+                            limit=50, sort=None):
+        # No host, so no audience to page. The default view still works.
+        return [], 0
 
     async def users_by_ids(self, db, user_ids):
         return []

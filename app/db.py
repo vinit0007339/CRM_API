@@ -56,6 +56,7 @@ def _models() -> List[Any]:
     from app.models.attribute import CrmAttributeModel
     from app.models.company import CompanyModel
     from app.models.contact import CrmContactModel
+    from app.models.contact_profile import CrmContactProfileModel
     from app.models.deal import DealModel
     from app.models.export_run import CrmExportModel
     from app.models.file import CrmFileModel
@@ -72,6 +73,11 @@ def _models() -> List[Any]:
         CrmActivityModel, CrmSettingsModel, CrmAttributeModel, CrmNoteModel,
         CrmFileModel, CrmTaskModel, CrmImportModel, CrmExportModel,
         CrmViewPreferenceModel, CrmSavedViewModel,
+        # Phase 1 of docs/contact-unification-plan.md. Registered ahead of any
+        # reader so the collection and its indexes exist before the read path
+        # lands. Purely additive: no existing index is touched, so unlike
+        # CrmContactModel below this one cannot conflict on deploy.
+        CrmContactProfileModel,
         # ⚠️ LAST, as `app/db/models/registry.py` had it before the object
         # was removed — see the ordering note above. Restored in the same
         # position rather than tucked in beside CompanyModel, so a diff

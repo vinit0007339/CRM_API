@@ -38,7 +38,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from app.config import logger as _logger
 from app.crud import (
     CompanyCrud, CrmActivityCrud, CrmAssociationCrud, CrmAttributeCrud,
-    CrmSettingsCrud, DealCrud, PipelineCrud,
+    CrmContactCrud, CrmSettingsCrud, DealCrud, PipelineCrud,
 )
 from app.models.deal import DealModel
 from app.object_id import PyObjectId
@@ -56,9 +56,10 @@ from app.schemas.deal import (
     DealStageChangeRequest, DealUpdateRequest, StageChangeRejection,
 )
 from app.services import (
-    attribute_routing, bulk_rules, filter_rules,
-    activity_recorder as ar, attributes as attr_rules, forecast,
-    permissions as perms, position as pos, serializers as sz, stage_rules,
+    associations as assoc_rules, attribute_routing, bulk_rules, contact_scope,
+    filter_rules, activity_recorder as ar, attributes as attr_rules, forecast,
+    live_counts, permissions as perms, position as pos, serializers as sz,
+    stage_rules,
 )
 from app.services.attributes import AttributeError_ as AttributeRuleError
 from app.services.filter_service import catalogue_for, fragment_for
@@ -287,6 +288,7 @@ async def list_deals(
     crud: DealCrud = Depends(get_crud(DealCrud)),
     pipelines: PipelineCrud = Depends(get_crud(PipelineCrud)),
     attributes: CrmAttributeCrud = Depends(get_crud(CrmAttributeCrud)),
+    assoc: CrmAssociationCrud = Depends(get_crud(CrmAssociationCrud)),
 ):
     """The List view. Unlike the board it spans every pipeline by default.
 
@@ -334,10 +336,24 @@ async def list_deals(
     # render its stage. Excluding them would blank the column for exactly the
     # rows a user is most likely to be auditing.
     by_pipeline = await _pipeline_index(pipelines, account_id)
-    data = [DealDetails.model_validate(
-        await _deal_payload(r, crud=crud, owner_index=owners,
-                            pipeline=by_pipeline.get(str(r.pipeline_id))))
-        for r in rows]
+    # ⚠️ THE Contacts COLUMN IS COUNTED, NOT READ OFF THE DEAL, for the same
+    # reason as the companies list: `contact_count` is a rollup kept on link
+    # and unlink, and a contact deleted from the marketing audience touches
+    # neither it nor the association — so the column kept counting somebody the
+    # deal's own Contacts panel no longer shows. Two reads for the whole page.
+    live = await live_counts.contact_counts(
+        assoc_crud=assoc, contact_crud_factory=CrmContactCrud,
+        db_session=crud.db_session, account_id=account_id,
+        entity_type="deal", entity_ids=[r.id for r in rows])
+    data = []
+    for r in rows:
+        payload = await _deal_payload(
+            r, crud=crud, owner_index=owners,
+            pipeline=by_pipeline.get(str(r.pipeline_id)))
+        counted = live.get(str(r.id))
+        if counted is not None:
+            payload["contact_count"] = counted
+        data.append(DealDetails.model_validate(payload))
 
     # CRM-311 (E24): the footer's figures.
     #
@@ -403,14 +419,23 @@ async def create_deal(
     assoc: CrmAssociationCrud = Depends(get_crud(CrmAssociationCrud)),
     activity: CrmActivityCrud = Depends(get_crud(CrmActivityCrud)),
     attributes: CrmAttributeCrud = Depends(get_crud(CrmAttributeCrud)),
+    conf_crud: CrmSettingsCrud = Depends(get_crud(CrmSettingsCrud)),
 ):
     """Create a deal. Pipeline and stage default to the account's default
     pipeline's first open stage, so the simplest possible payload is a name.
     """
     account_id = _account_id(ctx)
+    # Which association type a CRM person is on this account's path.
+    # One decision, made by `associations.person_entity`.
+    unified = contact_scope.unified(
+        await conf_crud.get_or_create(account_id=account_id))
 
+    # Falls back to the first pipeline when none is flagged default, so an
+    # account that archived its default can still take a deal. See
+    # `PipelineCrud.get_default_or_first`.
     pipeline = (await pipelines.get_scoped(account_id, payload.pipeline_id)
-                if payload.pipeline_id else await pipelines.get_default(account_id=account_id))
+                if payload.pipeline_id
+                else await pipelines.get_default_or_first(account_id=account_id))
     if not pipeline:
         return _fail("No pipeline found. Create one before adding deals.")
 
@@ -420,7 +445,9 @@ async def create_deal(
         if not stage:
             return _fail("That stage does not belong to the selected pipeline.")
     else:
-        stage = next((s for s in stages if s.get("type") == "open"), None)
+        # One definition of "the first open stage", shared with the lead door:
+        # ordered by `order`, and a stage with no `type` counts as open.
+        stage = stage_rules.first_open_stage(stages)
         if not stage:
             return _fail("That pipeline has no open stage to place the deal in.")
 
@@ -481,6 +508,10 @@ async def create_deal(
     for contact_id in payload.contact_ids or []:
         await assoc.link(account_id=account_id, from_type="deal", from_id=deal.id,
                          to_type="contact", to_id=contact_id, actor_user_id=ctx.user.id)
+    for crm_contact_id in getattr(payload, "crm_contact_ids", None) or []:
+        await assoc.link(account_id=account_id, from_type="deal", from_id=deal.id,
+                         to_type=assoc_rules.person_entity(unified),
+                         to_id=crm_contact_id, actor_user_id=ctx.user.id)
 
     await ar.record(activity.write, ar.created(
         entity_type="deal", name=deal.name, source=deal.source,
@@ -832,6 +863,7 @@ async def add_deal_links(
     crud: DealCrud = Depends(get_crud(DealCrud)),
     companies: CompanyCrud = Depends(get_crud(CompanyCrud)),
     assoc: CrmAssociationCrud = Depends(get_crud(CrmAssociationCrud)),
+    conf_crud: CrmSettingsCrud = Depends(get_crud(CrmSettingsCrud)),
 ):
     """Attach companies/contacts, and optionally set the primary company.
 
@@ -839,6 +871,10 @@ async def add_deal_links(
     refreshes the denormalised name on the deal.
     """
     account_id = _account_id(ctx)
+    # Which association type a CRM person is on this account's path.
+    # One decision, made by `associations.person_entity`.
+    unified = contact_scope.unified(
+        await conf_crud.get_or_create(account_id=account_id))
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
         return _fail("That deal no longer exists.")
@@ -864,6 +900,14 @@ async def add_deal_links(
     for contact_id in payload.contact_ids or []:
         if await assoc.link(account_id=account_id, from_type="deal", from_id=deal.id,
                             to_type="contact", to_id=contact_id,
+                            actor_user_id=ctx.user.id):
+            changed += 1
+        else:
+            already += 1
+    for crm_contact_id in payload.crm_contact_ids or []:
+        if await assoc.link(account_id=account_id, from_type="deal", from_id=deal.id,
+                            to_type=assoc_rules.person_entity(unified),
+                            to_id=crm_contact_id,
                             actor_user_id=ctx.user.id):
             changed += 1
         else:
@@ -901,8 +945,13 @@ async def remove_deal_links(
     ctx: RequestContext = Depends(require("deals:write")),
     crud: DealCrud = Depends(get_crud(DealCrud)),
     assoc: CrmAssociationCrud = Depends(get_crud(CrmAssociationCrud)),
+    conf_crud: CrmSettingsCrud = Depends(get_crud(CrmSettingsCrud)),
 ):
     account_id = _account_id(ctx)
+    # Which association type a CRM person is on this account's path.
+    # One decision, made by `associations.person_entity`.
+    unified = contact_scope.unified(
+        await conf_crud.get_or_create(account_id=account_id))
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
         return _fail("That deal no longer exists.")
@@ -914,6 +963,11 @@ async def remove_deal_links(
     for contact_id in payload.contact_ids or []:
         if await assoc.unlink(account_id=account_id, from_type="deal", from_id=deal.id,
                               to_type="contact", to_id=contact_id):
+            changed += 1
+    for crm_contact_id in payload.crm_contact_ids or []:
+        if await assoc.unlink(account_id=account_id, from_type="deal", from_id=deal.id,
+                              to_type=assoc_rules.person_entity(unified),
+                              to_id=crm_contact_id):
             changed += 1
 
     # ⚠️ DETACHING THE PRIMARY MUST CLEAR THE DENORMALISED FIELDS. They are
@@ -928,6 +982,130 @@ async def remove_deal_links(
         await deal.save()
 
     return _ok({"changed": changed}, f"{changed} record(s) unlinked.")
+
+
+@router.get("/{deal_id}/contacts", response_model=ResponseSchema)
+async def deal_contacts(
+    deal_id: PyObjectId = Path(...),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=0, le=200),
+    ctx: RequestContext = Depends(require("deals:read")),
+    crud: DealCrud = Depends(get_crud(DealCrud)),
+    assoc: CrmAssociationCrud = Depends(get_crud(CrmAssociationCrud)),
+):
+    """The people linked to this deal — platform contacts and CRM-owned both.
+
+    ⚠️ WITHOUT THIS A DEAL'S PEOPLE WERE A NUMBER. `POST /crm/deals` has always
+    accepted `contact_ids` and written the association, `contact_count` is
+    maintained on the deal, and the detail page renders
+    `["Contacts", deal.contact_count]` — so a deal could say "Contacts: 3" with
+    no way to find out who they were. The write path existed and nothing read
+    it back, the same shape of gap `GET /{deal_id}/companies` was added to fix.
+
+    ⚠️ BOTH ASSOCIATION TYPES, IN ONE RESPONSE, AND THE ROW SAYS WHICH IS
+    WHICH. `to_type="contact"` is a person in the platform's marketing audience,
+    read through `app/foreign.py`; `to_type="crm_contact"` is this service's
+    own. `app/routes/companies.py` resolves them side by side for the same
+    reason and its comments record why: the backfill that would have merged
+    them was abandoned, so nothing has to guess which collection an id belongs
+    to — the association names it.
+
+    Each row carries `source` so a caller can tell them apart without
+    inferring it from which fields are populated.
+
+    ⚠️ AND THIS READS BOTH TYPES UNCONDITIONALLY, WHICH IS WHY IT NEEDED NO
+    FLAG IN PHASE 6. On the unified path new links are written as `contact`,
+    so they arrive in the first set and the second is empty; pre-cutover links
+    are still `crm_contact` and arrive in the second. Both render. That makes
+    this the one endpoint that is correct *during* the phase 7 migration as
+    well as on either side of it — a deal half-migrated shows all its people,
+    not half of them.
+    """
+    account_id = _account_id(ctx)
+    deal = await crud.get_scoped(account_id, deal_id)
+    if not deal:
+        return _fail("That deal no longer exists.")
+
+    platform_ids = await assoc.counterparts(
+        account_id=account_id, entity_type="deal", entity_id=deal_id,
+        want_type="contact")
+    crm_ids = await assoc.counterparts(
+        account_id=account_id, entity_type="deal", entity_id=deal_id,
+        want_type="crm_contact")
+
+    total = len(platform_ids) + len(crm_ids)
+    # ⚠️ PAGED ACROSS THE TWO SETS AS ONE SEQUENCE, not two pages stitched
+    # together. Platform ids come first and keep their order, so a `skip` that
+    # lands inside the CRM-owned half does not silently re-serve the platform
+    # half's first row.
+    ordered = [("contact", i) for i in platform_ids] + \
+              [("crm_contact", i) for i in crm_ids]
+    page = ordered[skip:skip + limit] if limit else []
+
+    want_platform = [i for kind, i in page if kind == "contact"]
+    want_crm = [i for kind, i in page if kind == "crm_contact"]
+
+    def _ref(row: Any, source: str) -> Dict[str, Any]:
+        """One person, with ids as strings.
+
+        ⚠️ `sz.contact_ref` RETURNS THE RAW ObjectId, and that is fine
+        everywhere else because every other caller feeds it into a declared
+        schema (`CompanyDetails`) which coerces it. This endpoint answers a
+        plain dict under `response_model=ResponseSchema`, so an ObjectId
+        reaches pydantic's serialiser untyped and raises
+        `PydanticSerializationError` — a 500 on a read, from a value that is
+        correct. Stringified here rather than by changing `contact_ref`, whose
+        other callers rely on the current behaviour.
+        """
+        ref = sz.contact_ref(row)
+        if ref.get("id") is not None:
+            ref["id"] = str(ref["id"])
+        ref["source"] = source
+        return ref
+
+    rows: List[Dict[str, Any]] = []
+    if want_platform:
+        # ⚠️ NOT ACCOUNT-SCOPED, and `app/foreign.py` explains why: this is an
+        # EXPANSION of ids that already came off this account's own association
+        # rows, so they are already its own.
+        for row in await foreign.contacts_by_ids(crud.db_session, want_platform):
+            rows.append(_ref(row, "platform"))
+    if want_crm:
+        from app.crud.contact import CrmContactCrud
+
+        contacts = CrmContactCrud(crud.db_session)
+        for row in await contacts.list_by(
+                {"created_by": contacts.oid(account_id),
+                 "_id": {"$in": list(want_crm)}}, limit=len(want_crm)):
+            rows.append(_ref(row, "crm"))
+
+    # ⚠️ `total` COUNTS ASSOCIATIONS; `data` COUNTS PEOPLE WE COULD RESOLVE,
+    # and the two can differ. A platform contact deleted on the marketing side
+    # leaves its association row behind, so the deal still says it has a person
+    # and the row cannot be rendered. `GET /{company_id}/contacts` has the same
+    # property and returns `total: len(ids)` for the same reason: hiding the
+    # discrepancy would turn a visible "one of these is gone" into a silently
+    # shorter list.
+    # ⚠️ `total` COUNTS PEOPLE WE RESOLVED, NOT ASSOCIATION ROWS — AND IT USED
+    # TO COUNT THE ROWS. Deleting a contact from the audience leaves its
+    # association behind (nothing on the platform side knows this service's
+    # collections exist), so a record whose only person had been deleted still
+    # reported "Contacts (1)" with an empty list under it.
+    #
+    # ⚠️ ONLY WHEN THIS REQUEST COVERED EVERY ASSOCIATION. On a later page, or
+    # a capped one, the rows in hand are a window and `len(rows)` would be the
+    # size of the window, not of the set — so the association count stands and
+    # the caller's "could not be loaded" note still explains the difference.
+    # `limit=0` asks for no rows at all and is never "everything".
+    #
+    # ⚠️ THE ROWS ARE NOT DELETED HERE. `contacts_by_ids` returns `[]` for a
+    # lookup that FAILED as readily as for one that found nothing (it swallows
+    # the exception by design — see `host/directory.py`), so a dangling row and
+    # an unreachable host are indistinguishable from here. Counting is
+    # reversible; pruning on that signal would not be.
+    resolved_all = skip == 0 and bool(limit) and len(ordered) <= limit
+    return _ok({"data": rows, "total": len(rows) if resolved_all else total,
+                "counts": {"platform": len(platform_ids), "crm": len(crm_ids)}})
 
 
 @router.get("/{deal_id}/companies", response_model=ResponseSchema)

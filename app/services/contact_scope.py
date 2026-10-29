@@ -53,6 +53,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+# Aliased so the module-level name cannot be shadowed by the many locals called
+# `settings` in this service — `app/routes/settings.py` has one, and the CRUD
+# dependency is named that too. `app.config` imports nothing from app.services,
+# so this cannot cycle.
+from app.config import settings as _settings
 from app.object_id import PyObjectId
 
 # The two keys that can carry the account on a contact query. Anything claiming
@@ -180,3 +185,53 @@ def may_write(contact: Any, account: Any) -> bool:
     is the bug this exists to prevent.
     """
     return owns(contact, account)
+
+
+# ── the contact-unification cutover ──────────────────────────────────────────
+
+def unified(account_settings: Any) -> bool:
+    """Does this account serve contacts from the unified path?
+
+    Phase 3 of `docs/contact-unification-plan.md`, decision 0.1. **The only
+    place either switch is read.** Every branch in phases 4–6 asks this
+    function and nothing re-reads `settings.unified_contacts` or
+    `crm_settings.unified_contacts` for itself.
+
+    ⚠️ THAT SINGLE-READ RULE IS THE WHOLE DESIGN. Two paths exist for this
+    object during the rollout, and the failure mode of a flag read in several
+    places is not an outage — it is one request serving a contact from
+    `crm_contacts` and the next serving it from `contacts`, for the same
+    account, with the user watching fields appear and vanish. A second reader
+    that disagrees by one `or` is indistinguishable from a caching bug.
+
+    ⚠️ THE ENVIRONMENT WINS, AND IT WINS BOTH WAYS. `settings.unified_contacts`
+    is tri-state: `None` hands the decision to the account, `False` is the kill
+    switch that reverts everybody in a deploy rather than a write per account,
+    and `True` is the end of the rollout. An account flag can therefore be
+    overruled while still being *recorded*, so nothing is lost when the
+    override is removed — which is what makes reverting safe to do in a hurry.
+
+    Args:
+        account_settings: this account's `CrmSettingsModel`, or None. None
+            means settings could not be loaded, which is NOT a reason to
+            switch paths: it answers False, the behaviour the account already
+            had. A transient settings read failure must not move a user's
+            contacts to a different collection for one request.
+    """
+    override = getattr(_settings, "unified_contacts", None)
+    if override is not None:
+        return bool(override)
+    return bool(getattr(account_settings, "unified_contacts", False))
+
+
+def unified_override() -> Optional[str]:
+    """The environment override as a word, for `/health`: on, off, or None.
+
+    None means no override is set and each account's own flag decides. Reported
+    rather than inferred so "did the kill switch actually take?" is one curl
+    instead of a deploy inspection.
+    """
+    override = getattr(_settings, "unified_contacts", None)
+    if override is None:
+        return None
+    return "on" if override else "off"

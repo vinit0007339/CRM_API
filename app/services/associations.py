@@ -43,6 +43,31 @@ def _type_value(entity_type: Any) -> str:
     return getattr(entity_type, "value", entity_type)
 
 
+def person_entity(unified: bool) -> str:
+    """Which association type a CRM person is, on this account's path.
+
+    Phase 6 of `docs/contact-unification-plan.md`. **The one place that
+    decision is made**, for the same reason `contact_scope.unified` is the one
+    place the flag is read: a writer that disagrees by one branch produces
+    rows nothing can find.
+
+    ⚠️ `AssociationEntity.CRM_CONTACT` IS NOT REMOVED, AND MUST NOT BE. Its
+    POSITION in the enum defines the canonical direction a pair is stored in
+    (see this module's `_PRECEDENCE` and the enum's own warning). Deleting the
+    member would re-order the ones after it and orphan every row already
+    written. It becomes legacy — read, never written — which is a different
+    thing from gone.
+
+    ⚠️ AND THE OLD ROWS STILL RESOLVE. A deal linked to a CRM person before
+    the cutover holds `to_type="crm_contact"`; the detail routes read the type
+    that matches the account's current path, and phase 7's migration is what
+    rewrites the rows. Until it runs, an account that is flipped on sees its
+    pre-cutover links disappear from the page — which is why the flag is
+    per-account and the migration is not optional.
+    """
+    return "contact" if unified else "crm_contact"
+
+
 def normalize_pair(
     from_type: Any,
     from_id: Any,

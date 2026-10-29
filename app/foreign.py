@@ -2,16 +2,17 @@
 
     users       owner expansion — the name beside a deal or company
     tags        a company's tag chips
-    contacts    a company's Contacts tab, and resolving a note's or task's
-                target to a platform contact
+    contacts    a company's Contacts tab, resolving a note's or task's
+                target to a platform contact, and — since phase 4b — paging
+                the audience itself for the unified "All contacts" view
 
 ⚠️ EVERY READ OF THEM GOES THROUGH THIS FILE. That is the whole point of it.
 The CRM owns 14 collections and writes to no others; these three belong to the
 host. Scatter `db["contacts"]` through 38,000 lines instead and integrating
 this service into a second project starts with an archaeology phase.
 
-That bet paid off. This file is now five one-line delegations to
-`app/host/directory.py`, where the same five reads live behind an interface
+That bet paid off. This file is now six one-line delegations to
+`app/host/directory.py`, where the same six reads live behind an interface
 with three implementations — one database shared with the host, one HTTP call
 to it, or none at all. The call sites below did not change, and neither did
 the 891 integration tests that exercise them.
@@ -20,11 +21,16 @@ the 891 integration tests that exercise them.
 directly from the five call sites? Because the five call sites are the thing
 that must not grow. A module-level function is cheap to call from a sixth
 place; `foreign.py` existing as the single named door is what has kept the
-host surface at five reads through two phases of this move. The indirection is
+host surface to six reads through three phases of this move — and the sixth
+was argued for in a plan before it was written, which is the bar. The indirection is
 the point, not an artefact.
 
 There is no `write_*` function here, and there should never be one. A write to
-a host collection is a request to the host, not a query.
+a host collection is a request to the host, not a query. ⚠️ Since phase 5 of
+the contact unification there ARE such requests — `app/host_writes.py`, over
+`app/host/writer.py`. They live in their own file precisely so this rule can
+stay true here: a call site reaching into `foreign` is reading, always, and
+this module's count of host reads keeps meaning something.
 
 ⚠️ AND NO BEANIE MODEL FOR THEM. Registering the platform's `Contact`
 Document here would let this service manage the `contacts` indexes — a
@@ -40,7 +46,7 @@ in `directory.py`, and every adapter has to honour them.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.host.directory import ForeignRecord, get_directory
 
@@ -70,6 +76,30 @@ async def contacts_by_ids(db: Any,
                           contact_ids: List[Any]) -> List[Dict[str, Any]]:
     """Rows for a company's Contacts tab. EXPANSION — not scoped, see adapter."""
     return await get_directory().contacts_by_ids(db, contact_ids)
+
+
+async def contacts_page(db: Any, account_id: Any, *, q: Optional[str] = None,
+                        skip: int = 0, limit: int = 50,
+                        sort: Optional[List[tuple]] = None
+                        ) -> Tuple[List[Dict[str, Any]], int]:
+    """A page of this account's marketing audience, and the true total.
+
+    ⚠️ THE SIXTH DOOR. This file's whole argument is that five is the number
+    and it must not grow, so this was added as a decision rather than reached
+    for — `docs/contact-unification-phases.md` phase 4b. The unified "All
+    contacts" view lists the audience itself, and the other five reads can
+    only resolve ids the caller already holds; there is no way to page or
+    search a collection this service does not own.
+
+    ⚠️ A LOOKUP, NOT AN EXPANSION. It is account-scoped in every adapter, and
+    an adapter that cannot answer returns `([], 0)` rather than raising — the
+    All view goes empty, the default view is untouched.
+
+    ⚠️ IF YOU ARE ABOUT TO ADD A SEVENTH: don't, without the same deliberate
+    step. Each one is a thing the next host integration has to implement.
+    """
+    return await get_directory().contacts_page(
+        db, account_id, q=q, skip=skip, limit=limit, sort=sort)
 
 
 # ── users & tags: display expansion, never business logic ───────────────────

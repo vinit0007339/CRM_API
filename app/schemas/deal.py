@@ -40,6 +40,8 @@ class DealCreateRequest(BaseModel):
     company_ids: List[PyObjectId] = []
     primary_company_id: Optional[PyObjectId] = None
     contact_ids: List[PyObjectId] = []
+    #: CRM-owned people. See `DealLinksRequest.crm_contact_ids`.
+    crm_contact_ids: List[PyObjectId] = []
 
 
 class DealUpdateRequest(BaseModel):
@@ -99,7 +101,19 @@ class DealReopenRequest(BaseModel):
 
 class DealLinksRequest(BaseModel):
     company_ids: List[PyObjectId] = []
+    #: PLATFORM contacts — the marketing audience, `to_type="contact"`.
     contact_ids: List[PyObjectId] = []
+    #: CRM-OWNED people, `to_type="crm_contact"`.
+    #:
+    #: ⚠️ WITHOUT THIS A CRM CONTACT COULD NOT BE PUT ON A DEAL AT ALL. The
+    #: company page's "+ New contact" creates a `crm_contacts` row and the
+    #: company can hold it (`CompanyLinksRequest.crm_contact_ids`), but a deal
+    #: had only the platform field — so a person created in the CRM could be
+    #: attached to their company and never to the work. Two separate lists
+    #: rather than one guessing field, for the reason `AssociationEntity` gained
+    #: a second member: the row names the collection its id belongs to, so
+    #: neither is ever searched for the other's id.
+    crm_contact_ids: List[PyObjectId] = []
     primary_company_id: Optional[PyObjectId] = None
 
 

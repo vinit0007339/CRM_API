@@ -49,6 +49,7 @@ failure rather than the lossy one.
 from __future__ import annotations
 
 import argparse
+import pathlib
 import asyncio
 import re
 import sys
@@ -134,9 +135,79 @@ async def count_by_object_type(db, collection: str, object_type: str) -> int:
         return -1
 
 
+#: The file whose existence means the thing this script migrates AWAY from has
+#: come back. Checked statically, so the guard works without a database.
+CONTACT_MODEL = pathlib.Path(__file__).resolve().parent.parent / "app" / "models" / "contact.py"
+
+
+def refuse_if_contacts_are_back() -> None:
+    """⚠️ THIS SCRIPT IS NOW THE INVERSE OF THE CURRENT DESIGN.
+
+    It was written for the 23 Oct 2026 removal of the CRM's people object: it
+    repoints `crm_notes.contact_ids` and `crm_tasks.contact_ids` from CRM
+    contact ids to PLATFORM contact ids, matching on email within the account.
+
+    The object has since been RESTORED. `crm_contacts` is a live collection
+    again, `/crm/contacts` is mounted, and `AssociationEntity` has a
+    `crm_contact` member so a row states which population its contact id
+    belongs to. Running this now would walk notes and tasks that correctly
+    point at CRM contacts and repoint them at platform contacts — by EMAIL
+    MATCH, so a note could land on a different person entirely, and on the one
+    identifier the two populations happen to share rather than on identity.
+
+    It is kept rather than deleted because it is the only written record of
+    what the removal did to those two collections, and because a reader asking
+    "were my notes repointed?" needs to see the matching rules to answer it.
+    The report path stays available for exactly that question; only the write
+    path is closed.
+
+    Run it against a database that predates the restore by deleting
+    `app/models/contact.py` first — which is to say: don't, unless you are
+    deliberately reversing the restore.
+    """
+    if not CONTACT_MODEL.exists():
+        return
+    print("✗ REFUSING TO RUN. This script migrates away from the CRM contacts")
+    print("  object, and that object is back:")
+    print(f"      {CONTACT_MODEL} exists")
+    print()
+    print("  It would repoint notes and tasks that correctly reference CRM")
+    print("  contacts at PLATFORM contacts, matched by email — so a note can")
+    print("  move to a different person. See this function's docstring.")
+    print()
+    print("  If you need to know whether a PAST run moved anything, the")
+    print("  report path is still open: pass --report-anyway.")
+    sys.exit(2)
+
+
 async def main(apply: bool) -> int:
-    await Database.connect()
-    db = Database.db
+    # ⚠️ `Database.connect()` WAS HERE AND HAS NEVER EXISTED IN THIS REPO.
+    # `app/db.py`'s `Database` holds only `db_client` and `db`; the monolith's
+    # had a `connect()` classmethod and this script came across with the call
+    # intact, so it died with `AttributeError: type object 'Database' has no
+    # attribute 'connect'` before reading a single row. Which answers a
+    # question worth recording: whatever this script may have done, it did not
+    # do it from CRM_API.
+    #
+    # Connecting directly rather than through `init_db()` on purpose — that
+    # registers every model and creates their indexes, which for a read-only
+    # report is both unnecessary and, on a database carrying the old
+    # `uniq_crm_contact_email`, a guaranteed IndexOptionsConflict. Same
+    # approach `scripts/check_crm_contact_index.py` takes, for the same reason.
+    from motor.motor_asyncio import AsyncIOMotorClient
+
+    from app.config import settings
+
+    if not settings.db_uri or not settings.db_name:
+        print("✗ no database configured. Nothing read.")
+        return 1
+    client = AsyncIOMotorClient(settings.db_uri, serverSelectionTimeoutMS=5000)
+    db = client[settings.db_name]
+    try:
+        await db.command({"ping": 1})
+    except Exception as ex:                      # pylint: disable=broad-except
+        print(f"✗ cannot reach {settings.db_name}: {type(ex).__name__}: {ex}")
+        return 1
 
     index = await crm_contact_index(db)
     print(f"crm_contacts rows still present: {len(index):,}")
@@ -185,7 +256,16 @@ async def current_ids(db, collection: str, row_id) -> List[Any]:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--report-anyway", action="store_true",
+                        help="run the READ-ONLY report even though the CRM "
+                             "contacts object is back (see "
+                             "refuse_if_contacts_are_back)")
     parser.add_argument("--apply", action="store_true",
                         help="Repoint notes and tasks (default: report only)")
     args = parser.parse_args()
+    # ⚠️ THE GUARD RUNS BEFORE THE DATABASE IS TOUCHED, and `--report-anyway`
+    # does NOT unlock `--apply`: the read is a legitimate question to ask of an
+    # old database, the write is never right again.
+    if not args.report_anyway or args.apply:
+        refuse_if_contacts_are_back()
     sys.exit(asyncio.run(main(args.apply)))

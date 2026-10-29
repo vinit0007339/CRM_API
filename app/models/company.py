@@ -50,7 +50,7 @@ class CompanyModel(Document):
     domain: Optional[str] = None
     website: Optional[str] = None
     linkedin_url: Optional[str] = None
-    industry: Optional[str] = None            # value from crm_settings.industries
+    industry: Optional[str] = None            # free text; crm_settings.industries only suggests
     employee_count: Optional[int] = None
     annual_revenue: Optional[float] = None
     currency: Optional[str] = None            # ISO-4217; defaults from crm_settings

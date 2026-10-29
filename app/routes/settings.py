@@ -43,6 +43,7 @@ from app.crud.dependency import get_crud
 from app.schemas.common import ResponseSchema
 from app.schemas.settings import CrmSettingsUpdateRequest
 from app.services import attributes as attr_rules
+from app.services import contact_scope
 from app.services import lost_reason_rules as lr
 from app.services import serializers as sz
 from app.services.attributes import AttributeError_
@@ -153,6 +154,16 @@ async def get_settings(
         # endpoint every CRM screen loads first began 500ing.
         return _ok(sz.json_safe({
             "currency": conf.currency,
+            # Contact unification, phase 3. READ-ONLY, and absent from
+            # `CrmSettingsUpdateRequest` on purpose: an account admin must not
+            # be able to move themselves onto a half-finished read path from
+            # the settings screen. Ops sets the flag directly during the
+            # rollout. `effective` is what the code will actually do once the
+            # environment override is applied, which is the value worth
+            # showing — the account flag alone can be true while the kill
+            # switch holds everybody off.
+            "unified_contacts": conf.unified_contacts,
+            "unified_contacts_effective": contact_scope.unified(conf),
             # The shipped set, so the settings screen can offer "add the
             # standard reasons" to an account whose list is empty without
             # keeping a second copy of the labels in the client.

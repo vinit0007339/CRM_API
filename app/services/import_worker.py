@@ -36,7 +36,7 @@ from app.object_id import PyObjectId
 from app.services import contact_scope as cs
 from app.services import (
     activity_recorder as ar, attribute_routing, dedupe,
-    import_rules as ir, sanitise,
+    import_rules as ir, sanitise, stage_rules,
 )
 
 # How often progress is flushed and the cancel flag re-read. Small enough that
@@ -630,7 +630,17 @@ class ImportRunner:
 
         wanted_stage = (values.get("stage") or "").strip().lower()
         if not wanted_stage:
-            return pipeline, stages[0]
+            # ⚠️ NOT `stages[0]`. That was the index, with no open check at
+            # all: a pipeline whose stored array happens to begin with Won
+            # would have made every stage-less imported row a WON deal, and a
+            # jumbled array would have scattered them. Same rule as
+            # `POST /crm/deals` and the lead door now.
+            default_stage = stage_rules.first_open_stage(stages)
+            if default_stage is None:
+                raise RowFailure(
+                    f'Pipeline "{pipeline.name}" has no open stage to import '
+                    "deals into.")
+            return pipeline, default_stage
 
         for stage in stages:
             label = getattr(stage, "name", None) or (

@@ -20,16 +20,22 @@ customer to another is genuinely connected to both — and an extra link is
 visible and deletable, while a missing one is not.
 
 
-⚠️ NO CALLER AS OF PHASE 4a, AND THAT IS A STATED GAP, NOT AN OVERSIGHT. The
-only thing that drove this was `POST /api/v1/internal/crm/auto-link`, which
-phase 4a deleted along with the platform hook that called it: creating a
-MARKETING contact no longer reaches into the CRM. Domain-based company linking
-is still wanted — phase 5 drives it from `POST /crm/contacts`, where the
-contact being linked is the CRM's own.
+⚠️ IT HAS A CALLER AGAIN, AND THE GAP THIS NOTE DESCRIBED IS CLOSED.
+`POST /api/v1/internal/crm/auto-link` is back in `app/routes/internal.py`, and
+`_company_for_lead` in the same file uses this linker as the FALLBACK: when a
+captured lead carries no typed company name, the email domain is the only
+thing left to go on.
 
-Kept rather than deleted-and-restored because phase 5 is next and the churn
-would be pure. But `aee58ca`'s lesson applies and is worth repeating here:
-"Dead code that still imports cleanly gets called again." If phase 5 changes
+⚠️ STILL NOT CALLED BY THE PUBLIC CONTACT-CREATING PATHS — landing pages,
+signup forms, quizzes, event ingestion, webhooks — and deliberately. Those
+create a MARKETING contact; whether that becomes CRM data is the lead-intake
+decision, made by a `crm_deal` flow step, not a side effect of somebody
+submitting a form.
+
+The old note said this was kept rather than deleted because a phase was next
+and the churn would be pure. That turned out right. But `aee58ca`'s lesson
+still applies and is worth repeating:
+"Dead code that still imports cleanly gets called again." If a later change
 shape and this ends up with no caller after it, delete it.
 """
 from __future__ import annotations

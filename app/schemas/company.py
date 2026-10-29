@@ -41,7 +41,10 @@ class CompanyCreateRequest(BaseModel):
     website: Optional[str] = None
     linkedin_url: Optional[str] = None
     industry: Optional[str] = Field(
-        None, description="Value from crm_settings.industries — a picklist, not free text"
+        None, description=(
+            "Free text. `crm_settings.industries` is a suggestion list for "
+            "filters, not a constraint — nothing validates this against it"
+        )
     )
     employee_count: Optional[int] = Field(None, ge=0)
     annual_revenue: Optional[float] = Field(None, ge=0)
