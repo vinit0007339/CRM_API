@@ -297,7 +297,7 @@ SYNONYMS: Dict[str, Tuple[str, ...]] = {
 NOTE_COLUMNS: Tuple[Dict[str, str], ...] = (
     {"internal_name": "body", "label": "Note"},
     {"internal_name": "company_id", "label": "Company id"},
-    {"internal_name": "deal_id", "label": "Deal id"},
+    {"internal_name": "deal_id", "label": "Lead id"},
     {"internal_name": "contact_id", "label": "Contact id"},
     {"internal_name": "contact_email", "label": "Contact email"},
 )

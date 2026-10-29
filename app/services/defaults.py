@@ -119,12 +119,25 @@ SYSTEM_COMPANY_ATTRIBUTES = [
 # Only safe where the stored value needs no conversion: both ends here are
 # strings, so a company whose industry is "SaaS & Software" keeps it verbatim
 # and simply gains the ability to type something else.
+# Corrections to the LABEL of an `is_system` attribute whose default has since
+# changed, as `(object_type, internal_name, seeded_label, new_label)`.
+#
+# ⚠️ THE OLD LABEL IS PART OF THE KEY, AND HERE THAT MATTERS MORE THAN IT DOES
+# FOR A TYPE. `is_system` rows are explicitly RELABELLABLE — an account may
+# have renamed this field itself — so the repair matches only a row still
+# carrying the exact default it was seeded with. A row an account has edited
+# does not match and is left alone, which is the difference between fixing our
+# own stale default and overwriting someone's customisation.
+SYSTEM_ATTRIBUTE_RELABELS: Tuple[Tuple[str, str, str, str], ...] = (
+    ("deal", "name", "Deal name", "Lead name"),
+)
+
 SYSTEM_ATTRIBUTE_RETYPES: Tuple[Tuple[str, str, str, str], ...] = (
     ("company", "industry", "single_select", "text"),
 )
 
 SYSTEM_DEAL_ATTRIBUTES = [
-    ("name",                "Deal name",           "text",     True),
+    ("name",                "Lead name",           "text",     True),
     ("amount",              "Amount",              "currency", False),
     ("expected_close_date", "Expected close date", "date",     False),
     ("owner_id",            "Owner",               "user",      False),
@@ -232,6 +245,23 @@ def system_attribute_retypes() -> List[Dict[str, Any]]:
             "to_type": correct,
         }
         for object_type, internal_name, seeded, correct in SYSTEM_ATTRIBUTE_RETYPES
+    ]
+
+
+def system_attribute_relabels() -> List[Dict[str, Any]]:
+    """``SYSTEM_ATTRIBUTE_RELABELS`` as filter/update pairs for the crud layer.
+
+    Same shape as ``system_attribute_retypes`` so one repair pass can apply
+    both without the caller unpacking two different tuple orders.
+    """
+    return [
+        {
+            "object_type": object_type,
+            "internal_name": internal_name,
+            "from_label": seeded,
+            "to_label": new,
+        }
+        for object_type, internal_name, seeded, new in SYSTEM_ATTRIBUTE_RELABELS
     ]
 
 

@@ -304,7 +304,7 @@ async def _link_lead(lead: _Lead, *, account_id: Any, actor_user_id: Any,
     )
     created = await deals.insert(deal)
     if created is None:
-        return {"contact_id": lead.contact_id, "error": "deal not created"}
+        return {"contact_id": lead.contact_id, "error": "lead not created"}
 
     # ⚠️ THROUGH `normalize_pair`, NEVER A HAND-WRITTEN ROW. `AssociationEntity`
     # member order defines the canonical storage direction, and a row inserted
@@ -385,6 +385,6 @@ async def capture_leads(
         logger.info("lead intake: %s created, %s failed", created, failed)
     return ResponseSchema(
         status="success",
-        message=f"{created} deal(s) created.",
+        message=f"{created} lead(s) created.",
         data={"created": created, "failed": failed, "results": results},
     )

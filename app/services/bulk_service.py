@@ -229,4 +229,4 @@ class BulkRunner:
             _logger.exception(ex)
 
 
-SKIP_CLOSED_TEXT = "closed deals were left where they are"
+SKIP_CLOSED_TEXT = "closed leads were left where they are"

@@ -611,7 +611,7 @@ class ImportRunner:
         """
         pipelines = await self._pipelines()
         if not pipelines:
-            raise RowFailure("This account has no pipelines to import deals into.")
+            raise RowFailure("This account has no pipelines to import leads into.")
 
         wanted_pipeline = (values.get("pipeline") or "").strip().lower()
         pipeline = None
@@ -639,7 +639,7 @@ class ImportRunner:
             if default_stage is None:
                 raise RowFailure(
                     f'Pipeline "{pipeline.name}" has no open stage to import '
-                    "deals into.")
+                    "leads into.")
             return pipeline, default_stage
 
         for stage in stages:

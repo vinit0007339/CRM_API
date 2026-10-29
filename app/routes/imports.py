@@ -91,11 +91,11 @@ NOTE_PARENT_PERMISSIONS = {"company": "companies:write", "deal": "deals:write",
 # `test_e29_note_import.py`.
 REQUIRED_COLUMNS = {
     "company": ((("name",), "Map a column to Name — every company needs one."),),
-    "deal": ((("name",), "Map a column to Name — every deal needs one."),),
+    "deal": ((("name",), "Map a column to Name — every lead needs one."),),
     "note": ((("body",),
               "Map a column to Note — there is nothing to import otherwise."),
              (tuple(field for field, _ in iw.NOTE_TARGET_FIELDS),
-              "Map a column to a company, deal or contact — a note has to be "
+              "Map a column to a company, lead or contact — a note has to be "
               "attached to a record.")),
 }
 
@@ -219,7 +219,7 @@ async def preview_import(
     """
     account_id = _account_id(ctx)
     if entity_type not in ENTITY_PERMISSIONS:
-        return _fail("You can import companies, deals or notes.")
+        return _fail("You can import companies, leads or notes.")
     if not _may_import(ctx, entity_type):
         return _fail(f"You don't have permission to import {entity_type}s.")
 
@@ -298,7 +298,7 @@ async def start_import(
     """Start an import. Returns immediately; poll ``GET /{id}`` for progress."""
     account_id = _account_id(ctx)
     if entity_type not in ENTITY_PERMISSIONS:
-        return _fail("You can import companies, deals or notes.")
+        return _fail("You can import companies, leads or notes.")
     if not _may_import(ctx, entity_type):
         return _fail(f"You don't have permission to import {entity_type}s.")
 

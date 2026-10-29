@@ -66,7 +66,7 @@ MAX_COLUMNS = 15
 DERIVED_COLUMNS: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "company": (
         ("contact_count", "Contacts"),
-        ("deal_count", "Deals"),
+        ("deal_count", "Leads"),
         ("open_deal_value", "Open value"),
         ("last_activity_at", "Last activity"),
         ("created_at", "Created"),
@@ -86,7 +86,7 @@ DERIVED_COLUMNS: Dict[str, Tuple[Tuple[str, str], ...]] = {
         # edit it directly, but the list cannot render without it.
         ("full_name", "Name"),
         ("primary_company_name", "Company"),
-        ("deal_count", "Deals"),
+        ("deal_count", "Leads"),
         ("open_deal_value", "Open value"),
         ("last_activity_at", "Last activity"),
         ("created_at", "Created"),

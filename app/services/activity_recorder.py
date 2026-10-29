@@ -113,7 +113,11 @@ def build_activity(
 # once in `attributes.py`, `defaults.py`, `column_rules.py` and the bulk
 # runner. An unknown type now falls back to a generic word rather than
 # borrowing another object's noun.
-ENTITY_LABELS = {"company": "Company", "deal": "Deal", "contact": "Contact"}
+#: ⚠️ THE VALUES ARE WHAT A PERSON READS IN THE TIMELINE; THE KEYS ARE
+#: ENTITY TYPES AND MUST NOT MOVE. The module is called Leads in the UI,
+#: so an activity row that says "Deal linked" names something the user
+#: cannot find.
+ENTITY_LABELS = {"company": "Company", "deal": "Lead", "contact": "Contact"}
 
 # `created()`'s own vocabulary -> `ActivitySource` members.
 SOURCE_FOR_MODEL = {"manual": "ui"}
@@ -241,9 +245,9 @@ def closed(
     note: Optional[str] = None,
     **kw,
 ) -> Dict[str, Any]:
-    title = "Deal won" if outcome == "won" else "Deal lost"
+    title = "Lead won" if outcome == "won" else "Lead lost"
     if outcome == "lost" and reason:
-        title = f"Deal lost — {reason}"
+        title = f"Lead lost — {reason}"
     return build_activity(
         entity_type="deal",
         activity_type=outcome,
@@ -258,7 +262,7 @@ def reopened(*, to_stage: Dict[str, Any], **kw) -> Dict[str, Any]:
     return build_activity(
         entity_type="deal",
         activity_type="reopened",
-        title=f"Deal reopened in {to_stage.get('name')}",
+        title=f"Lead reopened in {to_stage.get('name')}",
         metadata={"to_stage_id": to_stage.get("id"), "to_stage_name": to_stage.get("name")},
         **kw,
     )

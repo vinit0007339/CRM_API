@@ -300,7 +300,7 @@ def can_delete_stage(
         if dest is None:
             raise StageRuleError("The destination stage does not exist in this pipeline.")
         if _sid(dest) == str(stage_id):
-            raise StageRuleError("Deals cannot be moved to the stage being deleted.")
+            raise StageRuleError("Leads cannot be moved to the stage being deleted.")
 
 
 def can_delete_pipeline(
@@ -417,7 +417,7 @@ def validate_transition(
 
     if _type_of(stage) in _CLOSED:
         raise StageRuleError(
-            "Use the close action to mark a deal as won or lost, so the amount, "
+            "Use the close action to mark a lead as won or lost, so the amount, "
             "close date and reason are recorded."
         )
 

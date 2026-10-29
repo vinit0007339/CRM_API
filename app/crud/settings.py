@@ -166,6 +166,39 @@ class CrmAttributeCrud(CrmCrudBase):
                 _logger.exception(ex)
         return changed
 
+    async def relabel_system(
+        self, *, account_id: Any, rows: List[Dict[str, Any]]
+    ) -> int:
+        """Correct the label of system rows still carrying a default we have
+        since changed. Returns how many rows changed.
+
+        ⚠️ THE OLD LABEL IS IN THE FILTER, which is what makes this safe to run
+        on every account. `is_system` rows are relabellable by design, so a row
+        an account has renamed itself does not match and keeps its name; only a
+        row still holding the exact string we seeded is touched. It is also
+        what makes the call idempotent.
+        """
+        acct = self.oid(account_id)
+        if not acct or not rows:
+            return 0
+        changed = 0
+        for row in rows:
+            try:
+                res = await CrmAttributeModel.get_motor_collection().update_many(
+                    {
+                        "created_by": acct,
+                        "object_type": row["object_type"],
+                        "internal_name": row["internal_name"],
+                        "label": row["from_label"],
+                        "is_system": True,
+                    },
+                    {"$set": {"label": row["to_label"]}},
+                )
+                changed += int(res.modified_count or 0)
+            except Exception as ex:  # pylint: disable=broad-except
+                _logger.exception(ex)
+        return changed
+
     async def labels_for(self, *, account_id: Any, object_type: str) -> dict:
         """``{internal_name: label}`` — feeds the required-attribute messages
         that ``stage_rules.validate_transition`` puts in front of the user.

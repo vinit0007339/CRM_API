@@ -437,7 +437,7 @@ async def create_deal(
                 if payload.pipeline_id
                 else await pipelines.get_default_or_first(account_id=account_id))
     if not pipeline:
-        return _fail("No pipeline found. Create one before adding deals.")
+        return _fail("No pipeline found. Create one before adding leads.")
 
     stages = _stage_dicts(pipeline)
     if payload.stage_id:
@@ -449,7 +449,7 @@ async def create_deal(
         # ordered by `order`, and a stage with no `type` counts as open.
         stage = stage_rules.first_open_stage(stages)
         if not stage:
-            return _fail("That pipeline has no open stage to place the deal in.")
+            return _fail("That pipeline has no open stage to place the lead in.")
 
     peers = await crud.column_positions(account_id=account_id, pipeline_id=pipeline.id,
                                         stage_id=stage["id"])
@@ -519,7 +519,7 @@ async def create_deal(
         actor_user_id=ctx.user.id, actor_name=_actor_name(ctx)))
 
     return _ok(DealDetails.model_validate(
-        await _deal_payload(deal, crud=crud, pipeline=pipeline)), "Deal created.")
+        await _deal_payload(deal, crud=crud, pipeline=pipeline)), "Lead created.")
 
 
 @router.get("/{deal_id}", response_model=ResponseSchema[DealDetails])
@@ -533,7 +533,7 @@ async def get_deal(
     account_id = _account_id(ctx)
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
-        return _fail("That deal no longer exists.")
+        return _fail("That lead no longer exists.")
     pipeline = await pipelines.get_scoped(account_id, deal.pipeline_id)
     return _ok(DealDetails.model_validate(
         await _deal_payload(
@@ -561,7 +561,7 @@ async def update_deal(
     account_id = _account_id(ctx)
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
-        return _fail("That deal no longer exists.")
+        return _fail("That lead no longer exists.")
     allowed, message = await _authorize(ctx, deal)
     if not allowed:
         return _fail(message)
@@ -604,7 +604,7 @@ async def update_deal(
         await _deal_payload(
             deal, crud=crud, pipeline=pipeline,
             reason_index=await _lost_reason_index(settings, account_id))),
-        "Deal updated.")
+        "Lead updated.")
 
 
 @router.delete("/{deal_id}", response_model=ResponseSchema)
@@ -617,14 +617,14 @@ async def delete_deal(
     account_id = _account_id(ctx)
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
-        return _fail("That deal no longer exists.")
+        return _fail("That lead no longer exists.")
     allowed, message = await _authorize(ctx, deal)
     if not allowed:
         return _fail(message)
     await assoc.delete_all_for(account_id=account_id, entity_type="deal",
                                entity_id=deal.id)
     await deal.delete()
-    return _ok(None, "Deal deleted.")
+    return _ok(None, "Lead deleted.")
 
 
 # ── CRM-037 · the drag-and-drop endpoint ─────────────────────────────────────
@@ -651,14 +651,14 @@ async def change_stage(
     account_id = _account_id(ctx)
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
-        return _fail("That deal no longer exists.")
+        return _fail("That lead no longer exists.")
     allowed, message = await _authorize(ctx, deal)
     if not allowed:
         return _fail(message)
 
     target_pipeline_id = payload.pipeline_id or deal.pipeline_id
     if str(target_pipeline_id) != str(deal.pipeline_id) and deal.status != "open":
-        return _fail("A closed deal cannot be moved to another pipeline.")
+        return _fail("A closed lead cannot be moved to another pipeline.")
 
     pipeline = await pipelines.get_scoped(account_id, target_pipeline_id)
     if not pipeline:
@@ -703,9 +703,9 @@ async def change_stage(
         account_id=account_id, entity_id=deal.id,
         actor_user_id=ctx.user.id, actor_name=_actor_name(ctx)))
 
-    message = "Deal moved."
+    message = "Lead moved."
     if renormalised:
-        message = "Deal moved. Card positions in that column were re-spaced."
+        message = "Lead moved. Card positions in that column were re-spaced."
     return _ok(DealDetails.model_validate(
         await _deal_payload(deal, crud=crud, pipeline=pipeline)), message)
 
@@ -752,16 +752,16 @@ async def close_deal(
     account_id = _account_id(ctx)
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
-        return _fail("That deal no longer exists.")
+        return _fail("That lead no longer exists.")
     allowed, message = await _authorize(ctx, deal)
     if not allowed:
         return _fail(message)
 
     outcome = getattr(payload.outcome, "value", payload.outcome)
     if outcome not in ("won", "lost"):
-        return _fail("A deal can only be closed as won or lost.")
+        return _fail("A lead can only be closed as won or lost.")
     if deal.status != "open":
-        return _fail("That deal is already closed. Reopen it first.")
+        return _fail("That lead is already closed. Reopen it first.")
 
     pipeline = await pipelines.get_scoped(account_id, deal.pipeline_id)
     if not pipeline:
@@ -774,7 +774,7 @@ async def close_deal(
     reason_index: Dict[str, str] = {}
     if outcome == "lost":
         if not payload.lost_reason_id:
-            return _fail("Choose a reason for losing this deal.")
+            return _fail("Choose a reason for losing this lead.")
         conf = await settings.get_or_create(account_id=account_id)
         reason = next((r for r in (conf.lost_reasons if conf else [])
                        if str(r.id) == str(payload.lost_reason_id)), None)
@@ -805,7 +805,7 @@ async def close_deal(
     return _ok(DealDetails.model_validate(
         await _deal_payload(deal, crud=crud, pipeline=pipeline,
                             reason_index=reason_index)),
-        f"Deal marked {outcome}.")
+        f"Lead marked {outcome}.")
 
 
 @router.post("/{deal_id}/reopen", response_model=ResponseSchema[DealDetails])
@@ -821,19 +821,19 @@ async def reopen_deal(
     account_id = _account_id(ctx)
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
-        return _fail("That deal no longer exists.")
+        return _fail("That lead no longer exists.")
     allowed, message = await _authorize(ctx, deal)
     if not allowed:
         return _fail(message)
     if deal.status == "open":
-        return _fail("That deal is already open.")
+        return _fail("That lead is already open.")
 
     pipeline = await pipelines.get_scoped(account_id, deal.pipeline_id)
     target = _find_stage(pipeline, payload.stage_id) if pipeline else None
     if not target:
         return _fail("That stage does not belong to the selected pipeline.")
     if target.get("type") != "open":
-        return _fail("Choose an open stage to reopen the deal into.")
+        return _fail("Choose an open stage to reopen the lead into.")
 
     column = await crud.column_positions(account_id=account_id, pipeline_id=pipeline.id,
                                          stage_id=target["id"])
@@ -851,7 +851,7 @@ async def reopen_deal(
         to_stage=target, account_id=account_id, entity_id=deal.id,
         actor_user_id=ctx.user.id, actor_name=_actor_name(ctx)))
     return _ok(DealDetails.model_validate(
-        await _deal_payload(deal, crud=crud, pipeline=pipeline)), "Deal reopened.")
+        await _deal_payload(deal, crud=crud, pipeline=pipeline)), "Lead reopened.")
 
 
 # ── CRM-039 · links & activities ─────────────────────────────────────────────
@@ -877,7 +877,7 @@ async def add_deal_links(
         await conf_crud.get_or_create(account_id=account_id))
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
-        return _fail("That deal no longer exists.")
+        return _fail("That lead no longer exists.")
 
     changed = 0
     already = 0
@@ -954,7 +954,7 @@ async def remove_deal_links(
         await conf_crud.get_or_create(account_id=account_id))
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
-        return _fail("That deal no longer exists.")
+        return _fail("That lead no longer exists.")
     changed = 0
     for company_id in payload.company_ids or []:
         if await assoc.unlink(account_id=account_id, from_type="company",
@@ -1024,7 +1024,7 @@ async def deal_contacts(
     account_id = _account_id(ctx)
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
-        return _fail("That deal no longer exists.")
+        return _fail("That lead no longer exists.")
 
     platform_ids = await assoc.counterparts(
         account_id=account_id, entity_type="deal", entity_id=deal_id,
@@ -1134,7 +1134,7 @@ async def deal_companies(
     account_id = _account_id(ctx)
     deal = await crud.get_scoped(account_id, deal_id)
     if not deal:
-        return _fail("That deal no longer exists.")
+        return _fail("That lead no longer exists.")
 
     ids = await assoc.counterparts(account_id=account_id, entity_type="deal",
                                    entity_id=deal_id, want_type="company")
@@ -1172,7 +1172,7 @@ async def deal_activities(
 ):
     account_id = _account_id(ctx)
     if not await crud.get_scoped(account_id, deal_id):
-        return _fail("That deal no longer exists.")
+        return _fail("That lead no longer exists.")
     rows = await activity.list(account_id=account_id, entity_type="deal",
                                entity_id=deal_id, activity_type=activity_type,
                                skip=skip, limit=limit)

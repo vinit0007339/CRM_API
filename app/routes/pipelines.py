@@ -319,11 +319,11 @@ async def delete_pipeline(
             return _fail("The destination pipeline does not exist.")
         target_stage_ids = {str(s.id) for s in (target.stages or [])}
         if not migrate_to_stage_id or str(migrate_to_stage_id) not in target_stage_ids:
-            return _fail("Choose a stage in the destination pipeline for the deals.")
+            return _fail("Choose a stage in the destination pipeline for the leads.")
         moved = await _migrate_deals(
             crud, account_id, pipeline.id, migrate_to_pipeline_id, migrate_to_stage_id
         )
-        _logger.info(f"CRM: migrated {moved} deals out of pipeline {pipeline.id}")
+        _logger.info(f"CRM: migrated {moved} leads out of pipeline {pipeline.id}")
 
     await pipeline.delete()
     return _ok(None, "Pipeline deleted.")

@@ -229,12 +229,18 @@ async def _repair_types(crud: CrmAttributeCrud, account_id: PyObjectId) -> int:
     changed = await crud.retype_system(
         account_id=account_id, rows=defaults.system_attribute_retypes()
     )
-    if changed:
+    # Labels drift for the same reason types do — a default changed after the
+    # account was seeded — and are repaired on the same once-per-account pass
+    # rather than in a second one with its own cache.
+    relabelled = await crud.relabel_system(
+        account_id=account_id, rows=defaults.system_attribute_relabels()
+    )
+    if changed or relabelled:
         _logger.info(
-            f"CRM: corrected the type of {changed} system attribute(s) for "
-            f"account {account_id}"
+            f"CRM: corrected {changed} system attribute type(s) and "
+            f"{relabelled} label(s) for account {account_id}"
         )
-    return changed
+    return changed + relabelled
 
 
 # ── write ────────────────────────────────────────────────────────────────────

@@ -113,7 +113,7 @@ def write_refusal(row: Any) -> str:
 def assert_object_type(value: Any) -> Tuple[str, Optional[str]]:
     kind = str(value or "").strip().lower()
     if kind not in OBJECT_TYPES:
-        return "", ("A view is saved for companies, deals or contacts.")
+        return "", ("A view is saved for companies, leads or contacts.")
     return kind, None
 
 

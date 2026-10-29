@@ -152,7 +152,7 @@ async def upload_file(
     account_id = _account_id(ctx)
 
     if entity_type not in PARENTS:
-        return _fail("Files attach to a deal, a company or a contact.")
+        return _fail("Files attach to a lead, a company or a contact.")
     if not _may(ctx, entity_type, write=True):
         return _fail(f"You don't have permission to attach files to a {entity_type}.")
 

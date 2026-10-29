@@ -68,8 +68,8 @@ SYSTEM_COLUMNS = {
         # Denormalised counters. Read-only, no attribute row describes
         # them, and the companies list has shown them since Phase 1 —
         # so a layout that includes them must survive into the export.
-        ("contact_count", "Contacts"), ("deal_count", "Deals"),
-        ("open_deal_value", "Open deal value"),
+        ("contact_count", "Contacts"), ("deal_count", "Leads"),
+        ("open_deal_value", "Open lead value"),
         ("last_activity_at", "Last activity"),
     ),
     "deal": (
