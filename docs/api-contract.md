@@ -1344,6 +1344,7 @@ script and no flag, which fails on drift in either direction.
 | `POST` | `/crm/contacts` | `contacts:write` | `ResponseSchema[ContactDetails]` |
 | `POST` | `/crm/contacts/bulk` | `contacts:write` | `ResponseSchema[BulkActionResult]` |
 | `GET` | `/crm/contacts/by-platform/{platform_contact_id}` | `contacts:read` | `ResponseSchema` |
+| `GET` | `/crm/contacts/by-platform/{platform_contact_id}/activities` | `contacts:read` | `ResponseSchema` |
 | `GET` | `/crm/contacts/filter-fields` | `contacts:read` | `ResponseSchema` |
 | `DELETE` | `/crm/contacts/{contact_id}` | `contacts:write` | `ResponseSchema` |
 | `GET` | `/crm/contacts/{contact_id}` | `contacts:read` | `ResponseSchema[ContactDetails]` |

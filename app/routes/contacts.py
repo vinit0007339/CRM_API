@@ -369,6 +369,52 @@ async def contact_filter_fields(
     return _ok({"fields": fields, "total": len(fields)})
 
 
+@router.get("/by-platform/{platform_contact_id}/activities",
+            response_model=ResponseSchema)
+async def platform_contact_activities(
+    platform_contact_id: PyObjectId = Path(...),
+    activity_type: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(30, ge=0, le=100),
+    ctx: RequestContext = Depends(require("contacts:read")),
+    activity: CrmActivityCrud = Depends(get_crud(CrmActivityCrud)),
+):
+    """A PLATFORM contact's full history, newest first, paged.
+
+    ⚠️ `GET /crm/contacts/{id}/activities` CANNOT ANSWER THIS. It guards on
+    `crud.get_scoped(account_id, contact_id)`, which looks the id up in
+    `crm_contacts` — so handing it a platform id returns "That contact no
+    longer exists" even though the account's activity rows for that person are
+    right there. The rows are written with `entity_type="contact"` and the
+    PLATFORM id (see `by-platform` above, which reads exactly these), so what
+    was missing was a door that takes that id.
+
+    ⚠️ AND `by-platform` IS A PREVIEW, NOT A HISTORY. It caps the same read at
+    `LINKED_PREVIEW` with no `skip` and no filter, because it paints three
+    side panels. Anything older than the newest handful was unreachable from
+    the marketing contact page — which is what this endpoint is for.
+
+    Nested `data: {data, total}` with `skip`/`limit` and the `activity_type`
+    filter, exactly like the deal, company and CRM-contact siblings, so one
+    `ActivityTimeline` serves all four.
+
+    ⚠️ NO EXISTENCE CHECK, DELIBERATELY. The contact lives in a collection this
+    service does not own, and `foreign.contact_by_id` would be a host read per
+    page view to answer a question the activity rows already answer: no rows
+    means no history. Scoping is by `account_id` as everywhere else, so this
+    cannot read another tenant's timeline.
+    """
+    account_id = _account_id(ctx)
+    rows = await activity.list(account_id=account_id, entity_type="contact",
+                               entity_id=platform_contact_id,
+                               activity_type=activity_type,
+                               skip=skip, limit=limit)
+    total = await activity.count(account_id=account_id, entity_type="contact",
+                                 entity_id=platform_contact_id,
+                                 activity_type=activity_type)
+    return _ok({"data": [sz.public_dump(r) for r in rows], "total": total})
+
+
 # ── create ───────────────────────────────────────────────────────────────────
 @router.get("/by-platform/{platform_contact_id}", response_model=ResponseSchema)
 async def platform_contact_crm_summary(

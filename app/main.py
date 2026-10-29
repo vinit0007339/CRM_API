@@ -39,7 +39,7 @@ API_ROOT_PATH = "/api/v1"
 #: health endpoint reports the live numbers beside these, so a half-finished
 #: move is visible rather than assumed.
 EXPECTED_ROUTERS = 14
-EXPECTED_ENDPOINTS = 97
+EXPECTED_ENDPOINTS = 98
 
 #: ⚠️ FOR COUNTING ONLY. The mounts themselves are the sixteen literal
 #: `include_router` calls in `_mount()`; this table must not grow into a loop
