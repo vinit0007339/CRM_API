@@ -87,6 +87,15 @@ class _Lead(BaseModel):
     deal_name: Optional[str] = None
     owner_id: Optional[str] = None
     amount: Optional[float] = None
+    #: What to write into the deal's `source`, e.g. "Automation (Welcome
+    #: series)". Optional, and omitting it keeps the old fixed "automation".
+    #:
+    #: ⚠️ THE CALLER NAMES THE SOURCE BECAUSE ONLY THE CALLER KNOWS IT. This
+    #: endpoint is reached by a flow step, by lead capture and by the list
+    #: scheduler, and it cannot tell them apart — so it stamped every deal
+    #: "automation" regardless, and a person looking at a deal could not tell
+    #: which automation, or whether it was an automation at all.
+    source: Optional[str] = None
     custom_fields: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -284,7 +293,11 @@ async def _link_lead(lead: _Lead, *, account_id: Any, actor_user_id: Any,
         pipeline_id=pipeline.id,
         stage_id=stage.id,
         amount=lead.amount,
-        source="automation",
+        # ⚠️ TRIMMED AND LENGTH-CAPPED. This lands in a column the deal list,
+        # the Overview and the export all render, and the flow name it carries
+        # is free text an account types — a 2,000-character "name" would break
+        # every one of those layouts.
+        source=((lead.source or "").strip()[:120] or "automation"),
         custom_fields=dict(lead.custom_fields or {}),
         primary_company_id=getattr(company, "id", None),
         primary_company_name=getattr(company, "name", None),
