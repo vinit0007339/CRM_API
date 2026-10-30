@@ -204,6 +204,24 @@ class DealDetails(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class CurrencySubtotal(BaseModel):
+    """One currency's share of the filtered set. CRM-440 phase 3.
+
+    ⚠️ `currency` IS NULLABLE AND THAT IS A REAL CASE, not a gap to fill. A
+    lead under a pipeline that never had a currency makes no claim about one;
+    defaulting it here would invent the claim. The client shows such a bucket
+    without a symbol.
+    """
+
+    currency: Optional[str] = None
+    deal_count: int = 0
+    total_value: float = 0.0
+    weighted_value: float = 0.0
+    open_total_value: float = 0.0
+    open_weighted_value: float = 0.0
+    unweighted_count: int = 0
+
+
 class DealListSummary(BaseModel):
     """Totals over the WHOLE filtered set, not the page. E24.
 
@@ -220,6 +238,13 @@ class DealListSummary(BaseModel):
     open_total_value: float = 0.0
     open_weighted_value: float = 0.0
     unweighted_count: int = 0
+    #: ⚠️ THE HONEST SPLIT. The flat totals above add every currency together
+    #: as bare numbers — fine for the single-currency account, which is most of
+    #: them, and meaningless the moment a list spans an INR pipeline and a USD
+    #: one. This carries one row per currency; the client renders it instead of
+    #: the flat figure whenever it holds more than one. Kept ADDITIVE so an
+    #: older client is exactly as correct as it was before.
+    by_currency: List[CurrencySubtotal] = []
 
 
 class DealListResponse(BaseModel):

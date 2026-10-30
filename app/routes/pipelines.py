@@ -217,6 +217,16 @@ async def create_pipeline(
 
     # First pipeline in an account is always the default.
     make_default = bool(payload.is_default) or not existing
+    # ⚠️ VALIDATED HERE, NOT TRUSTED FROM THE PAYLOAD. `currency` is a plain
+    # string on the schema and this is the door it comes through; an
+    # unsupported code must be refused rather than stored for a formatter to
+    # meet later. Omitted stays None, which reads as the account default.
+    currency = None
+    if payload.currency is not None:
+        currency = defaults.normalise_currency(payload.currency)
+        if currency is None:
+            return _fail(_unsupported_currency_message(payload.currency))
+
     if make_default:
         await crud.clear_default(account_id=account_id)
 
@@ -226,11 +236,22 @@ async def create_pipeline(
         description=payload.description,
         is_default=make_default,
         weighted_forecast_enabled=bool(payload.weighted_forecast_enabled),
-        currency=payload.currency,
+        currency=currency,
         stages=_dicts_to_stages(rows),
     )
     await crud.insert(pipeline)
     return _ok(_details(pipeline, 0), "Pipeline created.")
+
+
+def _unsupported_currency_message(value: Any) -> str:
+    """One wording for both doors, naming what IS allowed.
+
+    "Unsupported currency" alone leaves the caller guessing; the list is three
+    items long and costs nothing to show.
+    """
+    supported = ", ".join(defaults.SUPPORTED_CURRENCIES)
+    return (f"“{str(value).strip()}” is not a currency this account can use. "
+            f"Choose one of: {supported}.")
 
 
 @router.patch("/{pipeline_id}", response_model=ResponseSchema[PipelineDetails])
@@ -264,7 +285,14 @@ async def update_pipeline(
     if payload.weighted_forecast_enabled is not None:
         pipeline.weighted_forecast_enabled = bool(payload.weighted_forecast_enabled)
     if payload.currency is not None:
-        pipeline.currency = payload.currency
+        # ⚠️ THE SAME RULE AS CREATE. A pipeline sitting on a retired code
+        # (EUR and friends, offered before this list existed) keeps it until
+        # someone deliberately changes it — but the new value must be one we
+        # support, so an edit cannot introduce a fourth currency.
+        code = defaults.normalise_currency(payload.currency)
+        if code is None:
+            return _fail(_unsupported_currency_message(payload.currency))
+        pipeline.currency = code
 
     if payload.is_default is True:
         await crud.clear_default(account_id=account_id, except_id=pipeline.id)

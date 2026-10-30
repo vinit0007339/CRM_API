@@ -264,8 +264,14 @@ COMPANY_UPDATABLE = frozenset({
     "description", "owner_id", "tag_ids", "custom_fields", "is_archived",
 })
 
+#: ⚠️ `currency` IS NOT UPDATABLE, AND THAT IS THE POINT. A lead's currency is
+#: its PIPELINE's — set on create and re-set when it moves (see
+#: `routes/deals.py`). Leaving it here let a PATCH, an import or an attribute
+#: write put a USD lead inside an INR pipeline, and every total on that board
+#: then summed the two as bare numbers with nothing on screen to say so. To
+#: change a lead's currency, change the pipeline's or move the lead.
 DEAL_UPDATABLE = frozenset({
-    "name", "amount", "currency", "expected_close_date", "probability",
+    "name", "amount", "expected_close_date", "probability",
     "owner_id", "description", "source", "tag_ids", "custom_fields",
 })
 

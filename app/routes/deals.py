@@ -463,7 +463,13 @@ async def create_deal(
         status=stage_rules.status_for_stage(stage),
         position=pos.append_position(peers[-1] if peers else None),
         amount=payload.amount,
-        currency=payload.currency or pipeline.currency,
+        # ⚠️ THE PIPELINE DECIDES, AND THE PAYLOAD DOES NOT GET A VOTE. This
+        # was `payload.currency or pipeline.currency`, which let an API caller
+        # or an import put a USD lead inside an INR pipeline — and every total
+        # on that board then added the two together as bare numbers. One
+        # currency per pipeline is what makes those sums mean anything.
+        # See `docs/currency.md`.
+        currency=pipeline.currency,
         expected_close_date=payload.expected_close_date,
         probability=payload.probability,
         description=payload.description,
@@ -690,6 +696,21 @@ async def change_stage(
     days = stage_rules.days_in_stage(deal.stage_entered_at, _utcnow())
 
     deal.pipeline_id = pipeline.id
+    # ⚠️ THE CURRENCY MOVES WITH IT. A move used to set `pipeline_id` and
+    # leave `currency` alone, so a USD lead dropped into an INR pipeline kept
+    # USD — and that pipeline's column totals silently became a mix with
+    # nothing on screen to say so. This is the one line that stops a pipeline
+    # going mixed without anybody choosing it.
+    #
+    # ⚠️ IT DOES NOT CONVERT THE AMOUNT, and must not pretend to: 5,000 is
+    # still 5,000. Moving a lead between pipelines of different currencies is
+    # a re-denomination the person doing it has to mean — the amount is theirs
+    # to restate. Logged so it is visible rather than silent.
+    if pipeline.currency and deal.currency != pipeline.currency:
+        _logger.info(
+            f"CRM: lead {deal.id} moved into pipeline {pipeline.id}; currency "
+            f"{deal.currency} -> {pipeline.currency} (amount unchanged)")
+        deal.currency = pipeline.currency
     deal.stage_id = target_stage["id"]
     deal.status = stage_rules.status_for_stage(target_stage)
     deal.position = new_position

@@ -446,6 +446,27 @@ def _stage_group_stage() -> Dict[str, Any]:
     }
 
 
+def _stage_currency_group_stage() -> Dict[str, Any]:
+    """``_stage_group_stage`` keyed by stage AND currency. CRM-440 phase 3.
+
+    ⚠️ THE LIST SPANS PIPELINES, AND PIPELINES HAVE DIFFERENT CURRENCIES. The
+    board is safe to sum on its own — one pipeline, one currency (see
+    `docs/currency.md`) — but the deals LIST has no pipeline filter by default,
+    so `$sum: "$amount"` there adds INR to USD as bare numbers and the footer
+    states the result as one figure. Adding `currency` to the key is what lets
+    the caller report "₹4.2L · $5,000" instead of a number that is not true in
+    any currency.
+
+    ⚠️ A NULL CURRENCY IS ITS OWN GROUP, not a default. A lead whose pipeline
+    never had one makes no claim; folding it into INR would be inventing the
+    claim. It comes back under `null` and the caller decides how to show it.
+    """
+    group = dict(_stage_group_stage())
+    group["_id"] = {"stage_id": "$stage_id",
+                    "currency": {"$ifNull": ["$currency", None]}}
+    return group
+
+
 def list_totals_pipeline(*, account_id: Any, **kw) -> List[Dict[str, Any]]:
     """Per-stage sums over the DEALS LIST's filter — every pipeline, E24.
 
@@ -458,7 +479,7 @@ def list_totals_pipeline(*, account_id: Any, **kw) -> List[Dict[str, Any]]:
     """
     return [
         {"$match": deal_filter(account_id=account_id, **kw)},
-        {"$group": _stage_group_stage()},
+        {"$group": _stage_currency_group_stage()},
     ]
 
 

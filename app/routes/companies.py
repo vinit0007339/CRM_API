@@ -426,7 +426,11 @@ async def get_company(
             crm_contacts, len(crm_contact_ids), sz.contact_ref),
         linked_deals=sz.linked_collection(
             deal_rows, len(deal_ids),
+            # ⚠️ `currency` TRAVELS WITH `amount`. Without it the company's
+            # Leads tab formatted every figure with the app default, so a USD
+            # lead read ₹5,000 on the company page and $5,000 on its own.
             lambda d: {"id": d.id, "name": d.name, "amount": d.amount,
+                       "currency": d.currency,
                        "status": getattr(d.status, "value", d.status),
                        "stage_id": d.stage_id,
                        "expected_close_date": d.expected_close_date},

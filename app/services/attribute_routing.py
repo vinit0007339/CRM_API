@@ -26,7 +26,11 @@ SYSTEM_FIELDS = {
         "employee_count", "annual_revenue", "currency", "phone",
         "phone_country_code", "description",
     },
-    "deal": {"name", "amount", "currency", "expected_close_date", "description"},
+    # ⚠️ `currency` IS ABSENT ON PURPOSE. It is the PIPELINE's, not the lead's
+    # (see `serializers.DEAL_UPDATABLE`). Listed here it would route a
+    # `custom_fields: {"currency": "EUR"}` straight onto the column and
+    # reintroduce a mixed-currency pipeline through the back door.
+    "deal": {"name", "amount", "expected_close_date", "description"},
     # E25, restored with the contacts object. These are TYPED COLUMNS on
     # CrmContactModel, so a custom value under one of these names must route to
     # the column and not into `custom_fields` — which is the whole job of this

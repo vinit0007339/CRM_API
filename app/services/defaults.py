@@ -38,6 +38,33 @@ DEFAULT_STAGES: List[Dict[str, Any]] = [
      "color": "#FF5252", "rotting_days": None, "required_attributes": []},
 ]
 
+# The currencies a pipeline may be created or updated with. CRM-440.
+#
+# ⚠️ THE SERVER IS THE AUTHORITY, NOT THE PICKER. The UI listed seven codes in
+# a hardcoded array and every schema typed `currency` as a plain
+# `Optional[str]`, so the API accepted any string at all — "usd", "Rs",
+# "" — and a pipeline could end up holding something no formatter knows.
+#
+# ⚠️ A RETIRED CODE IS NOT DELETED. EUR, GBP, AED, SGD and AUD were offered
+# before this list existed, so a pipeline may still hold one. Validation
+# applies to WRITES only: an existing pipeline keeps its value, the picker
+# shows it as an unselectable option, and `scripts/check_currency_usage.py`
+# reports where they are. Rewriting an account's money setting on its behalf
+# is the one thing this must not do.
+SUPPORTED_CURRENCIES: Tuple[str, ...] = ("INR", "USD", "CAD")
+
+
+def normalise_currency(value: Any) -> Optional[str]:
+    """A supported ISO code, or ``None`` when it is not one.
+
+    Case and surrounding space are forgiven — "  usd " is USD — because an
+    import or an API caller will send both. Anything else returns None, and
+    the caller decides whether that is a rejection or a fall-back.
+    """
+    code = str(value or "").strip().upper()
+    return code if code in SUPPORTED_CURRENCIES else None
+
+
 DEFAULT_LOST_REASONS = [
     "Price too high",
     "Chose a competitor",

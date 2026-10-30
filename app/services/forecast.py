@@ -173,6 +173,15 @@ def list_summary(groups: Iterable[Dict[str, Any]],
     ``total_value`` and ``deal_count``, stays out of ``weighted_value``, and
     ``unweighted_count`` says how many — which is what lets the footer admit
     the weighted figure is incomplete instead of quietly being wrong.
+
+    ⚠️ **THE FLAT TOTALS ADD CURRENCIES TOGETHER, AND `by_currency` IS WHY
+    THEY SURVIVE.** `groups` is per (stage, CURRENCY) since CRM-440 phase 3,
+    because the list spans pipelines and pipelines differ in currency. The flat
+    `total_value` is kept — single-currency accounts are the common case and
+    every caller still reads it — but `by_currency` carries the honest split,
+    and the UI shows that instead whenever it holds more than one entry. A
+    caller that renders only the flat figure is no worse off than before; one
+    that renders `by_currency` is correct.
     """
     deal_count = 0
     total = 0.0
@@ -180,27 +189,60 @@ def list_summary(groups: Iterable[Dict[str, Any]],
     open_total = 0.0
     open_weighted = 0.0
     unweighted = 0
+    #: {currency_or_None: {deal_count, total_value, weighted_value,
+    #:                     open_total_value, open_weighted_value}}
+    per_currency: Dict[Any, Dict[str, Any]] = {}
+
+    def _bucket(code: Any) -> Dict[str, Any]:
+        return per_currency.setdefault(code, {
+            "currency": code,
+            "deal_count": 0,
+            "total_value": 0.0,
+            "weighted_value": 0.0,
+            "open_total_value": 0.0,
+            "open_weighted_value": 0.0,
+            "unweighted_count": 0,
+        })
 
     for row in groups or []:
         count = int(row.get("deal_count") or 0)
         amount = float(row.get("total_value") or 0.0)
+        bucket = _bucket(row.get("currency"))
         deal_count += count
         total += amount
+        bucket["deal_count"] += count
+        bucket["total_value"] += amount
 
         stage = stages_by_id.get(str(row.get("stage_id") or row.get("_id") or ""))
         if not stage:
             unweighted += count
+            bucket["unweighted_count"] += count
             continue
 
         # Unrounded: this is a SUM, and `_PRECISION` is applied once below.
         value = _stage_weighted_raw(stage, row)
         weighted += value
+        bucket["weighted_value"] += value
 
         stage_type = stage.get("type", "open")
         stage_type = getattr(stage_type, "value", stage_type)
         if stage_type == "open":
             open_total += amount
             open_weighted += value
+            bucket["open_total_value"] += amount
+            bucket["open_weighted_value"] += value
+
+    # ⚠️ SORTED BY VALUE, NOT BY CODE. The footer shows these in a row and the
+    # biggest subtotal is the one a reader is looking for; alphabetical would
+    # put CAD before INR on an Indian account for no reason.
+    rows_out = sorted(
+        (
+            {**b, **{k: round(v, _PRECISION) for k, v in b.items()
+                     if isinstance(v, float)}}
+            for b in per_currency.values()
+        ),
+        key=lambda b: -b["total_value"],
+    )
 
     return {
         "deal_count": deal_count,
@@ -212,6 +254,7 @@ def list_summary(groups: Iterable[Dict[str, Any]],
         "open_total_value": round(open_total, _PRECISION),
         "open_weighted_value": round(open_weighted, _PRECISION),
         "unweighted_count": unweighted,
+        "by_currency": rows_out,
     }
 
 

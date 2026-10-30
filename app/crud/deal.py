@@ -61,9 +61,14 @@ class DealCrud(CrmCrudBase):
         except Exception as ex:  # pylint: disable=broad-except
             _logger.exception(ex)
             return []
+        # ⚠️ `_id` IS A COMPOUND KEY NOW: `{stage_id, currency}`. The list
+        # spans pipelines and pipelines differ in currency, so the rows are
+        # per (stage, currency) — see `queries._stage_currency_group_stage`.
+        # Flattened here so `forecast.list_summary` reads plain fields.
         return [
             {
-                "stage_id": r.get("_id"),
+                "stage_id": (r.get("_id") or {}).get("stage_id"),
+                "currency": (r.get("_id") or {}).get("currency"),
                 "deal_count": int(r.get("deal_count") or 0),
                 "total_value": float(r.get("total_value") or 0.0),
                 "weighted_overridden": float(r.get("weighted_overridden") or 0.0),
