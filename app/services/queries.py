@@ -521,11 +521,23 @@ def activity_filter(
     account_id: Any,
     entity_type: Optional[str] = None,
     entity_id: Any = None,
+    #: ``[(entity_type, entity_id)]`` — the timeline of SEVERAL records at
+    #: once. CRM-442.
+    #:
+    #: ⚠️ A LIST OF PAIRS, NOT TWO LISTS. A contact's related history spans
+    #: its deals and its companies, and `{entity_type: {$in: [...]},
+    #: entity_id: {$in: [...]}}` would also match a DEAL whose id happens to
+    #: equal one of the company ids — ObjectIds are unique per collection, not
+    #: across them. `$or` over exact pairs is the only form that cannot
+    #: cross-match.
+    entities: Optional[List[Any]] = None,
     activity_type: Optional[str] = None,
     occurred_from: Any = None,
     occurred_to: Any = None,
 ) -> Dict[str, Any]:
     f = _base(account_id)
+    if entities:
+        f["$or"] = [{"entity_type": et, "entity_id": eid} for et, eid in entities]
     if entity_type:
         f["entity_type"] = entity_type
     if entity_id is not None:

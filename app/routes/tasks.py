@@ -166,9 +166,20 @@ async def _record(activity: CrmActivityCrud, ctx: RequestContext,
                 # json_safe: metadata is Dict[str, Any] and an ObjectId in an
                 # untyped container has no serializer. That bug 500'd the
                 # activities endpoint in Phase 1.
+                # ⚠️ due_at IS A SNAPSHOT, NOT A POINTER. A timeline row says
+                # what was true when it happened; re-reading the task at
+                # render time would rewrite history every time the date moved.
+                #
+                # ⚠️ AND NO DONE FLAG HERE. A "task created" row is written
+                # when nothing is done yet, so storing `is_done` would freeze
+                # a False that later turns true and let the reader paint a
+                # finished task as overdue forever. Whether it was finished is
+                # a LATER row on the same `task_id`, which the reader already
+                # has — so it computes "overdue" from the feed, not from here.
                 metadata=sz.json_safe({"task_id": task.id,
                                        "task_title": task.title,
-                                       "task_type": task.task_type}),
+                                       "task_type": task.task_type,
+                                       "task_due_at": task.due_at}),
                 actor_user_id=ctx.user.id, actor_name=_actor_name(ctx)))
         except Exception:  # pylint: disable=broad-except
             # The activity trail must never fail the write it describes.

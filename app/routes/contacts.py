@@ -374,9 +374,17 @@ async def contact_filter_fields(
 async def platform_contact_activities(
     platform_contact_id: PyObjectId = Path(...),
     activity_type: Optional[str] = Query(None),
+    scope: str = Query(
+        "contact", pattern="^(contact|related)$",
+        description='"contact" = rows written against this person only. '
+                    '"related" also spans the leads and companies they are '
+                    'linked to.'),
     skip: int = Query(0, ge=0),
     limit: int = Query(30, ge=0, le=100),
     ctx: RequestContext = Depends(require("contacts:read")),
+    assoc: CrmAssociationCrud = Depends(get_crud(CrmAssociationCrud)),
+    deals: DealCrud = Depends(get_crud(DealCrud)),
+    companies: CompanyCrud = Depends(get_crud(CompanyCrud)),
     activity: CrmActivityCrud = Depends(get_crud(CrmActivityCrud)),
 ):
     """A PLATFORM contact's full history, newest first, paged.
@@ -405,14 +413,65 @@ async def platform_contact_activities(
     cannot read another tenant's timeline.
     """
     account_id = _account_id(ctx)
-    rows = await activity.list(account_id=account_id, entity_type="contact",
-                               entity_id=platform_contact_id,
-                               activity_type=activity_type,
-                               skip=skip, limit=limit)
-    total = await activity.count(account_id=account_id, entity_type="contact",
-                                 entity_id=platform_contact_id,
-                                 activity_type=activity_type)
-    return _ok({"data": [sz.public_dump(r) for r in rows], "total": total})
+
+    # ⚠️ `scope=related` IS WHY A TASK ON THEIR DEAL SHOWS UP HERE. A task or
+    # note written against a DEAL records its activity on the deal's timeline,
+    # not the contact's — `task_rules.linked_ids` writes one row per linked
+    # record and a deal is not a contact. So "everything about this person"
+    # has to span the records they are attached to, or a call scheduled on
+    # their open lead is invisible on their own page.
+    #
+    # Pairs, never two $in lists: see `queries.activity_filter`.
+    entities: Optional[List[Any]] = None
+    names: Dict[str, str] = {}
+    if scope == "related":
+        deal_ids = await assoc.counterparts(
+            account_id=account_id, entity_type="contact",
+            entity_id=platform_contact_id, want_type="deal")
+        company_ids = await assoc.counterparts(
+            account_id=account_id, entity_type="contact",
+            entity_id=platform_contact_id, want_type="company")
+        entities = ([("contact", platform_contact_id)]
+                    + [("deal", i) for i in deal_ids]
+                    + [("company", i) for i in company_ids])
+
+        # ⚠️ NAMES RESOLVED ONCE, FOR THE LABEL. A row that says "Task
+        # created" with no hint of WHICH lead it was on is worse than not
+        # showing it: the reader cannot tell whether it concerns them. Two
+        # queries for the whole page, not one per row.
+        if deal_ids:
+            for row in await deals.list_by(
+                    {"created_by": account_id, "_id": {"$in": deal_ids}},
+                    limit=len(deal_ids)):
+                names[str(row.id)] = row.name
+        if company_ids:
+            for row in await companies.list_by(
+                    {"created_by": companies.oid(account_id),
+                     "_id": {"$in": companies.oids(company_ids)}},
+                    limit=len(company_ids)):
+                names[str(row.id)] = row.name
+
+    common = dict(account_id=account_id, activity_type=activity_type)
+    if entities is not None:
+        common["entities"] = entities
+    else:
+        common.update(entity_type="contact", entity_id=platform_contact_id)
+
+    rows = await activity.list(skip=skip, limit=limit, **common)
+    total = await activity.count(**common)
+
+    out = []
+    for row in rows:
+        item = sz.public_dump(row)
+        # The record this happened ON, so the client can say "on Demo deal"
+        # without a second lookup. Absent for the contact's own rows, which
+        # need no such label.
+        entity_type = getattr(row.entity_type, "value", row.entity_type)
+        if entity_type != "contact":
+            item["on_type"] = entity_type
+            item["on_name"] = names.get(str(row.entity_id))
+        out.append(item)
+    return _ok({"data": out, "total": total})
 
 
 # ── create ───────────────────────────────────────────────────────────────────
